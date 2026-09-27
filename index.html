@@ -1,0 +1,1363 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>XY Scope</title>
+<meta name="description" content="GPU XY oscilloscope / audio visualizer that runs in your browser.">
+<style>
+:root{
+  --bg:#000; --panel:rgba(20,22,27,.92); --border:#464a56; --text:#e2e5ec; --dim:#8a90a0;
+  --disabled:#5c606a; --accent:#56d678; --accent-ink:#0e1610; --track:#343842; --hover:rgba(255,255,255,.05);
+  --btn:#2a2e37; --btn-hover:#3a3f4b; --warn:#ff825f; --reset:#f0be5a;
+  --font: "Segoe UI Variable Text","Segoe UI",system-ui,-apple-system,Roboto,Arial,sans-serif;
+}
+*{box-sizing:border-box}
+html,body{margin:0;height:100%;background:var(--bg);color:var(--text);font:14px/1.35 var(--font);overflow:hidden;
+  -webkit-user-select:none;user-select:none}
+canvas#scope{position:fixed;inset:0;width:100vw;height:100vh;display:block}
+button{font:inherit;color:inherit}
+.hidden{display:none!important}
+body.nocursor{cursor:none}
+
+/* HUD */
+#hud{position:fixed;left:12px;top:10px;font-size:12px;color:#9096a4;pointer-events:none;text-shadow:0 1px 2px #000;
+  max-width:calc(100vw - 160px);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+#hud .err{color:var(--warn)}
+#hud .hint{color:#5f6470}
+#settingsBtn{position:fixed;right:12px;top:12px;height:34px;padding:0 18px;border-radius:9px;border:1px solid var(--border);
+  background:var(--btn);cursor:pointer;z-index:5}
+#settingsBtn:hover{background:var(--btn-hover)}
+#settingsBtn.open{border-color:var(--accent)}
+body.ui-hidden #hud, body.ui-hidden #settingsBtn, body.ui-hidden #panel{display:none!important}
+
+/* Panel */
+#panel{position:fixed;right:12px;top:56px;bottom:12px;width:min(400px,calc(100vw - 24px));display:flex;flex-direction:column;
+  background:var(--panel);border:1px solid var(--border);border-radius:12px;z-index:4;
+  backdrop-filter:blur(8px);-webkit-backdrop-filter:blur(8px);box-shadow:0 10px 40px rgba(0,0,0,.5)}
+#tabs{display:grid;grid-template-columns:repeat(6,1fr);gap:2px;padding:10px 10px 6px}
+.tab{position:relative;height:30px;border:0;border-radius:7px;background:transparent;color:var(--dim);cursor:pointer;
+  font-size:13px;padding:0 2px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.tab:hover{background:var(--hover)}
+.tab.sel{background:var(--btn);color:var(--text);box-shadow:inset 0 -2px 0 var(--accent)}
+.tab .dot{position:absolute;right:4px;top:4px;width:6px;height:6px;border-radius:50%;background:var(--reset);display:none}
+.tab.changed .dot{display:block}
+#content{flex:1;overflow-y:auto;padding:0 16px 10px;scrollbar-width:thin;scrollbar-color:#555 transparent}
+#footer{display:flex;align-items:center;gap:8px;padding:10px 14px;border-top:1px solid var(--border)}
+#footer .hint{flex:1;font-size:12px;color:var(--dim);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.btn{height:30px;padding:0 14px;border-radius:7px;border:1px solid var(--border);background:var(--btn);cursor:pointer;white-space:nowrap}
+.btn:hover{background:var(--btn-hover)}
+.btn.warn{background:var(--warn);color:#1a1a1a;border-color:var(--warn)}
+.btn.primary{background:var(--accent);color:var(--accent-ink);border-color:var(--accent);font-weight:600}
+.btn.sel{border-color:var(--accent);box-shadow:inset 0 0 0 1px var(--accent)}
+
+.row{position:relative;padding:6px 26px 6px 0;border-radius:6px}
+.row:hover{background:var(--hover)}
+.row.header:hover,.row.note:hover{background:transparent}
+.row.header{display:flex;align-items:center;gap:8px;padding:14px 0 4px;color:var(--accent);font-weight:700;font-size:12.5px;
+  letter-spacing:.06em;text-transform:uppercase}
+.row.header::after{content:"";flex:1;height:1px;background:var(--border)}
+.row.note{font-size:12px;color:var(--dim);padding:4px 0}
+.row.dim .lab, .row.dim .val{color:var(--disabled)}
+.row.dim input[type=range]{filter:saturate(.25) brightness(.7)}
+.row.dim .switch.on, .row.dim .seg button.sel{filter:saturate(.35) brightness(.75)}
+.line{display:flex;align-items:center;gap:10px;min-height:24px}
+.lab{flex:1;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.val{font-variant-numeric:tabular-nums;color:var(--text);white-space:nowrap}
+.reset{position:absolute;right:2px;top:7px;width:20px;height:20px;border:0;padding:0;background:transparent;color:var(--dim);
+  cursor:pointer;display:none;border-radius:4px}
+.reset:hover{color:var(--reset);background:var(--hover)}
+.reset svg{width:16px;height:16px;display:block;margin:auto}
+.row.changed .reset{display:block}
+
+/* toggle switch */
+.switch{width:34px;height:18px;border-radius:9px;background:var(--track);position:relative;flex:none;border:0;padding:0;cursor:pointer}
+.switch::after{content:"";position:absolute;left:3px;top:3px;width:12px;height:12px;border-radius:50%;background:#f0f0f0;transition:left .12s}
+.switch.on{background:var(--accent)}
+.switch.on::after{left:19px}
+.row.toggle{cursor:pointer}
+
+/* slider */
+input[type=range]{-webkit-appearance:none;appearance:none;width:100%;height:22px;background:transparent;margin:2px 0 0;cursor:pointer;
+  --pct:0%;--fill:var(--accent)}
+input[type=range]:focus{outline:none}
+input[type=range]::-webkit-slider-runnable-track{height:6px;border-radius:3px;
+  background:linear-gradient(to right,var(--fill) 0 var(--pct),var(--track) var(--pct) 100%)}
+input[type=range]::-moz-range-track{height:6px;border-radius:3px;background:linear-gradient(to right,var(--fill) 0 var(--pct),var(--track) var(--pct) 100%)}
+input[type=range]::-webkit-slider-thumb{-webkit-appearance:none;width:16px;height:16px;border-radius:50%;background:#f4f4f4;margin-top:-5px;border:0}
+input[type=range]::-moz-range-thumb{width:16px;height:16px;border-radius:50%;background:#f4f4f4;border:0}
+input[type=range]:focus-visible::-webkit-slider-thumb{box-shadow:0 0 0 3px var(--accent)}
+input[type=range]:focus-visible::-moz-range-thumb{box-shadow:0 0 0 3px var(--accent)}
+
+/* segmented */
+.seg{display:inline-flex;background:var(--btn);border-radius:7px;padding:2px;gap:2px;flex:none}
+.seg button{border:0;background:transparent;border-radius:5px;padding:4px 11px;cursor:pointer;color:var(--text);white-space:nowrap}
+.seg button:hover{background:var(--btn-hover)}
+.seg button.sel{background:var(--accent);color:var(--accent-ink)}
+
+/* swatches */
+.swatches{display:flex;gap:8px;flex-wrap:wrap;padding:4px 0}
+.swatch{width:30px;height:30px;border-radius:7px;border:0;cursor:pointer;padding:0}
+.swatch.sel{outline:2px solid #fafafa;outline-offset:3px}
+.row.dim .swatch{filter:brightness(.4)}
+input[type=color]{width:64px;height:26px;border:1px solid var(--border);border-radius:6px;background:var(--btn);padding:2px;cursor:pointer}
+
+/* meter */
+.meter{flex:1;height:8px;border-radius:4px;background:var(--track);overflow:hidden}
+.meter i{display:block;height:100%;width:0;background:var(--accent);border-radius:4px}
+select{font:inherit;color:var(--text);background:var(--btn);border:1px solid var(--border);border-radius:6px;height:28px;width:100%;padding:0 6px}
+
+/* overlays */
+.overlay{position:fixed;inset:0;display:flex;align-items:center;justify-content:center;z-index:10;background:rgba(0,0,0,.55);
+  backdrop-filter:blur(3px);-webkit-backdrop-filter:blur(3px);padding:16px}
+.card{background:rgba(20,22,27,.97);border:1px solid var(--border);border-radius:14px;padding:24px 26px;max-width:620px;width:100%;
+  max-height:calc(100vh - 32px);overflow:auto;box-shadow:0 20px 60px rgba(0,0,0,.6)}
+.card h1{margin:0 0 4px;font-size:24px}
+.card h1 span{color:var(--accent)}
+.card h2{margin:0 0 14px;font-size:18px;color:var(--accent)}
+.card p{margin:6px 0;color:var(--dim)}
+.sources{display:grid;grid-template-columns:1fr 1fr;gap:10px;margin:18px 0 8px}
+.src{display:flex;flex-direction:column;align-items:flex-start;gap:4px;text-align:left;padding:14px;border-radius:10px;
+  border:1px solid var(--border);background:var(--btn);cursor:pointer;min-height:86px}
+.src:hover{background:var(--btn-hover);border-color:#6a7080}
+.src b{font-size:15px}
+.src small{color:var(--dim);font-size:12.5px}
+.src.big{grid-column:1/-1;border-color:var(--accent)}
+.src.big b{color:var(--accent)}
+.steps{margin:10px 0 0;padding:12px 14px 12px 32px;background:rgba(86,214,120,.07);border:1px solid rgba(86,214,120,.25);border-radius:10px}
+.steps li{margin:3px 0}
+.msg{margin-top:12px;padding:10px 12px;border-radius:8px;background:rgba(255,130,95,.12);border:1px solid rgba(255,130,95,.4);color:#ffc2b0}
+.keys{display:grid;grid-template-columns:auto 1fr;gap:8px 22px;margin:8px 0 14px}
+.keys b{white-space:nowrap}
+.keys span{color:var(--dim)}
+kbd{font:600 12px var(--font);background:var(--btn);border:1px solid var(--border);border-radius:4px;padding:1px 6px}
+#dropHint{position:fixed;inset:12px;border:2px dashed var(--accent);border-radius:14px;display:flex;align-items:center;justify-content:center;
+  font-size:22px;color:var(--accent);background:rgba(0,0,0,.6);z-index:20;pointer-events:none}
+@media (max-width:560px){.sources{grid-template-columns:1fr}}
+</style>
+</head>
+<body>
+<canvas id="scope"></canvas>
+<div id="hud"></div>
+<button id="settingsBtn" title="Settings (S)">Settings</button>
+
+<aside id="panel" class="hidden" aria-label="Settings">
+  <div id="tabs" role="tablist"></div>
+  <div id="content"></div>
+  <div id="footer">
+    <div class="hint" title="Right-click or double-click a slider to reset it. H = help">Right-click slider = reset</div>
+    <button class="btn" id="resetTab">Reset tab</button>
+    <button class="btn" id="resetAll">Reset all</button>
+  </div>
+</aside>
+
+<div id="start" class="overlay">
+  <div class="card">
+    <h1>XY <span>Scope</span></h1>
+    <p>An oscilloscope-style visualizer for whatever your computer is playing. Everything runs on this page; nothing is uploaded or recorded.</p>
+    <div class="sources">
+      <button class="src big" data-src="system"><b>Visualize system audio</b>
+        <small>Music, games, videos — anything playing on this PC. Uses the browser's screen-share prompt to get the sound.</small></button>
+      <button class="src" data-src="file"><b>Play an audio file</b><small>Pick or drag in an MP3 / WAV / FLAC file.</small></button>
+      <button class="src" data-src="mic"><b>Microphone / line-in</b><small>A mic, audio interface, Stereo Mix or virtual cable.</small></button>
+      <button class="src" data-src="demo"><b>Demo signal</b><small>A built-in test pattern (silent). No permissions needed.</small></button>
+    </div>
+    <ol class="steps" id="sysSteps">
+      <li>Click <b>Visualize system audio</b>.</li>
+      <li>In the popup choose the <b>Entire screen</b> tab and click your screen.</li>
+      <li>Turn on <b>Also share system audio</b>, then click <b>Share</b>.</li>
+      <li>Click <b>Hide</b> on the “sharing your screen” bar if it’s in the way.</li>
+    </ol>
+    <p style="font-size:12px;margin-top:10px">The picture of your screen is thrown away immediately — only the sound is used. Best in Chrome or Edge on Windows.</p>
+    <div id="startMsg" class="msg hidden"></div>
+  </div>
+</div>
+
+<div id="help" class="overlay hidden">
+  <div class="card" style="max-width:520px">
+    <h2>Keyboard &amp; mouse</h2>
+    <div class="keys">
+      <b><kbd>S</kbd></b><span>Open / close settings</span>
+      <b><kbd>Z</kbd></b><span>Hide / show all on-screen UI</span>
+      <b><kbd>F</kbd> or <kbd>X</kbd></b><span>Toggle fullscreen</span>
+      <b><kbd>C</kbd></b><span>Next colour preset</span>
+      <b><kbd>G</kbd></b><span>Toggle grid</span>
+      <b><kbd>A</kbd></b><span>Change audio source</span>
+      <b><kbd>H</kbd> or <kbd>?</kbd></b><span>This help</span>
+      <b><kbd>←</kbd> <kbd>→</kbd></b><span>Fine-tune the focused slider</span>
+      <b>Right-click</b><span>Reset a slider (double-click also works)</span>
+      <b><kbd>Esc</kbd></b><span>Close help / settings</span>
+    </div>
+    <p style="font-size:12px">Settings are saved in this browser automatically.</p>
+    <div style="text-align:right;margin-top:10px"><button class="btn" id="helpClose">Close</button></div>
+  </div>
+</div>
+<div id="dropHint" class="hidden">Drop an audio file to play it</div>
+<input type="file" id="fileInput" accept="audio/*,.mp3,.wav,.flac,.ogg,.m4a,.aac,.opus" class="hidden">
+<script>
+"use strict";
+/* =====================================================================
+   XY Scope (web) — port of xy_scope_soundcard48.py to WebGL2 + Web Audio
+   Single self-contained file: no libraries, no server, no install.
+   ===================================================================== */
+const VERSION = "web-1.0";
+const RING = 1 << 16;                 // 65536-sample history per channel
+const AGC_MIN_GAIN = 0.2, AGC_SILENCE = 1e-3, SILENCE_TIMEOUT = 0.30, REF_FPS = 120;
+const STORE_KEY = "xyscope.settings.v1";
+
+const PALETTE = [
+  ["#39ff14", "Neon green"], ["#ffffff", "White"], ["#00ffff", "Cyan"], ["#ff00ff", "Magenta"],
+  ["#ffff00", "Yellow"], ["#ff7800", "Orange"], ["#b4b4ff", "Lavender"], ["#ff5078", "Pink"],
+];
+
+const DEFAULTS = {
+  // Display
+  draw_mode: "line", thickness: 2.0, speed_dim: 0.35, brightness: 1.8, grid: false,
+  glow_on: true, glow_strength: 0.9, glow_radius: 1.0,
+  trails: true, trail_persist: 0.71, window_samples: 1000, render_scale: 1,
+  // Shape
+  circ_on: false, circ_src: "Mono", circ_base: 1.0, circ_rad: 0.5, circ_extra: 0,
+  mirror_on: false, mirror_mode: "XY", mirror_pre3d: true,
+  // Motion
+  rot3d: true, persp: 0.3, depth: 1.0,
+  yaw: 0.0, auto_yaw: false, yaw_rate: 90.0,
+  pitch: 0.0, auto_pitch: false, pitch_rate: 90.0,
+  roll: 0.0, auto_roll: false, roll_rate: 90.0,
+  spin_on: false, spin_rate: 120.0, spin_dir: "CCW",
+  // Color
+  palette_idx: 0, custom_on: false, custom_color: "#39ff14", cycle_on: false, cycle_rate: 180.0,
+  // Audio
+  agc_on: false, gain: 1.0, agc_target: 0.8, agc_max: 5.0, agc_attack_ms: 50, agc_release_ms: 1000,
+  gate_on: false, noise_floor: 0.10,
+  // Filters
+  dc_on: false, dc_cut: 3.0,
+  hpf_on: false, hpf_freq: 200, hpf_q: 0.707, hpf_slope: 24,
+  lpf_on: false, lpf_freq: 12000, lpf_q: 0.707, lpf_slope: 24,
+};
+
+const S = loadSettings();
+function loadSettings() {
+  const s = { ...DEFAULTS };
+  try {
+    const d = JSON.parse(localStorage.getItem(STORE_KEY) || "{}");
+    for (const k in DEFAULTS) {
+      if (!(k in d)) continue;
+      const dv = DEFAULTS[k], v = d[k];
+      if (typeof dv === "number" ? (typeof v === "number" && isFinite(v)) : typeof v === typeof dv) s[k] = v;
+    }
+  } catch (e) { /* private mode / blocked storage: just use defaults */ }
+  return s;
+}
+let saveTimer = 0;
+function saveSettings() {
+  clearTimeout(saveTimer);
+  saveTimer = setTimeout(() => { try { localStorage.setItem(STORE_KEY, JSON.stringify(S)); } catch (e) {} }, 300);
+}
+const approxEq = (a, b) => (typeof a === "number" && typeof b === "number")
+  ? Math.abs(a - b) <= 1e-6 * Math.max(1, Math.abs(b)) : a === b;
+const clamp = (v, lo, hi) => Math.min(hi, Math.max(lo, v));
+const wrapDeg = a => ((a + 180) % 360 + 360) % 360 - 180;
+function hexToRgb(h) {
+  const m = /^#?([0-9a-f]{6})$/i.exec(h || ""); if (!m) return [0.22, 1, 0.08];
+  const n = parseInt(m[1], 16); return [(n >> 16 & 255) / 255, (n >> 8 & 255) / 255, (n & 255) / 255];
+}
+function hsvToRgb(hDeg) {
+  const h = ((hDeg % 360) + 360) % 360 / 60, x = 1 - Math.abs(h % 2 - 1), i = Math.floor(h);
+  return [[1, x, 0], [x, 1, 0], [0, 1, x], [0, x, 1], [x, 0, 1], [1, 0, x]][i % 6];
+}
+
+/* =====================================================================
+   Audio engine
+   source -> [DC block] -> [HPF x1-2] -> [LPF x1-2] -> AudioWorklet tap -> ring buffer
+   The tap posts aligned L/R blocks, so the X and Y channels never drift apart.
+   ===================================================================== */
+const TAP_SRC = `
+class XYTap extends AudioWorkletProcessor {
+  constructor() { super(); this.N = 256; this.n = 0; this.L = new Float32Array(this.N); this.R = new Float32Array(this.N); }
+  process(inputs) {
+    const inp = inputs[0];
+    if (inp && inp.length) {
+      const l = inp[0], r = inp.length > 1 ? inp[1] : inp[0];
+      for (let i = 0; i < l.length; i++) {
+        this.L[this.n] = l[i]; this.R[this.n] = r[i];
+        if (++this.n === this.N) {
+          this.port.postMessage([this.L, this.R], [this.L.buffer, this.R.buffer]);
+          this.L = new Float32Array(this.N); this.R = new Float32Array(this.N); this.n = 0;
+        }
+      }
+    }
+    return true;
+  }
+}
+registerProcessor("xy-tap", XYTap);`;
+
+class AudioEngine {
+  constructor() {
+    this.ctx = null; this.tap = null; this.input = null; this.filterNodes = [];
+    this.ringL = new Float32Array(RING); this.ringR = new Float32Array(RING); this.widx = 0;
+    this.lastData = 0; this.kind = null; this.label = "No source"; this.error = "";
+    this.cleanup = null; this.filterSig = ""; this.onEnded = null;
+    this.audioEl = null; this.micDeviceId = "";
+  }
+  get sampleRate() { return this.ctx ? this.ctx.sampleRate : 48000; }
+
+  async ensureContext() {
+    if (!this.ctx) {
+      const AC = window.AudioContext || window.webkitAudioContext;
+      this.ctx = new AC({ latencyHint: "interactive" });
+      this.tap = await this._makeTap();
+      const mute = this.ctx.createGain(); mute.gain.value = 0;      // keeps the tap running, outputs nothing
+      this.tap.connect(mute).connect(this.ctx.destination);
+      this.input = this.ctx.createGain();                          // every source connects here
+      this.input.channelCount = 2; this.input.channelCountMode = "explicit"; this.input.channelInterpretation = "speakers";
+      this.rebuildFilters(true);
+    }
+    if (this.ctx.state !== "running") await this.ctx.resume();
+  }
+
+  async _makeTap() {
+    const ctx = this.ctx;
+    // Preferred: AudioWorklet (runs on the audio thread). Loading a worklet from a blob/data URL
+    // is blocked when the page is opened straight from disk (file://), so fall back gracefully.
+    const srcs = [URL.createObjectURL(new Blob([TAP_SRC], { type: "application/javascript" })),
+                  "data:application/javascript;charset=utf-8," + encodeURIComponent(TAP_SRC)];
+    if (ctx.audioWorklet) for (const url of srcs) {
+      try {
+        await ctx.audioWorklet.addModule(url);
+        const node = new AudioWorkletNode(ctx, "xy-tap", {
+          numberOfInputs: 1, numberOfOutputs: 1, outputChannelCount: [1],
+          channelCount: 2, channelCountMode: "explicit", channelInterpretation: "speakers" });
+        node.port.onmessage = e => this._write(e.data[0], e.data[1]);
+        this.tapKind = "worklet";
+        return node;
+      } catch (e) { /* try the next option */ }
+      finally { if (url.startsWith("blob:")) URL.revokeObjectURL(url); }
+    }
+    // Fallback: ScriptProcessorNode (older API, still supported everywhere; slightly more latency)
+    const sp = ctx.createScriptProcessor(1024, 2, 1);
+    sp.channelCount = 2; sp.channelCountMode = "explicit"; sp.channelInterpretation = "speakers";
+    sp.onaudioprocess = e => {
+      const ib = e.inputBuffer;
+      const L = ib.getChannelData(0), R = ib.numberOfChannels > 1 ? ib.getChannelData(1) : L;
+      this._write(L, R);
+    };
+    this.tapKind = "script";
+    return sp;
+  }
+
+  _write(L, R) {
+    const n = L.length; let i = this.widx;
+    if (i + n <= RING) { this.ringL.set(L, i); this.ringR.set(R, i); }
+    else { const c = RING - i; this.ringL.set(L.subarray(0, c), i); this.ringR.set(R.subarray(0, c), i);
+           this.ringL.set(L.subarray(c), 0); this.ringR.set(R.subarray(c), 0); }
+    this.widx = (i + n) % RING; this.lastData = performance.now();
+  }
+
+  /** Copy the newest n samples into outL/outR (oldest first). */
+  latest(n, outL, outR) {
+    const i = this.widx;
+    if (i >= n) { outL.set(this.ringL.subarray(i - n, i)); outR.set(this.ringR.subarray(i - n, i)); }
+    else { const a = n - i;
+      outL.set(this.ringL.subarray(RING - a), 0); outL.set(this.ringL.subarray(0, i), a);
+      outR.set(this.ringR.subarray(RING - a), 0); outR.set(this.ringR.subarray(0, i), a); }
+  }
+  get stale() { return !this.lastData || (performance.now() - this.lastData) / 1000 > SILENCE_TIMEOUT; }
+
+  /* ---------- filters (native Web Audio nodes) ---------- */
+  rebuildFilters(force = false) {
+    if (!this.ctx) return;
+    const sig = [S.dc_on, S.dc_on ? S.dc_cut : 0, S.hpf_on, S.hpf_slope, S.lpf_on, S.lpf_slope].join("|");
+    if (!force && sig === this.filterSig) { this.updateFilterParams(); return; }
+    this.filterSig = sig;
+    try { this.input.disconnect(); } catch (e) {}
+    for (const n of this.filterNodes) { try { n.node.disconnect(); } catch (e) {} }
+    this.filterNodes = [];
+    const ctx = this.ctx, sr = ctx.sampleRate;
+    const add = (node, type) => { node.channelCount = 2; node.channelCountMode = "explicit"; this.filterNodes.push({ node, type }); };
+    if (S.dc_on) {   // y[n] = a*(y[n-1] + x[n] - x[n-1]) — same as the Python version
+      const a = Math.exp(-2 * Math.PI * clamp(S.dc_cut, 0.05, 50) / sr);
+      add(ctx.createIIRFilter([a, -a], [1, -a]), "dc");
+    }
+    if (S.hpf_on) for (let i = 0; i < (S.hpf_slope <= 12 ? 1 : 2); i++) add(new BiquadFilterNode(ctx, { type: "highpass" }), "hp");
+    if (S.lpf_on) for (let i = 0; i < (S.lpf_slope <= 12 ? 1 : 2); i++) add(new BiquadFilterNode(ctx, { type: "lowpass" }), "lp");
+    let prev = this.input;
+    for (const f of this.filterNodes) { prev.connect(f.node); prev = f.node; }
+    prev.connect(this.tap);
+    this.updateFilterParams(true);
+  }
+  updateFilterParams(immediate = false) {
+    if (!this.ctx) return;
+    const t = this.ctx.currentTime, sr = this.ctx.sampleRate;
+    const qdb = q => 20 * Math.log10(clamp(q, 0.3, 10));   // Web Audio HP/LP Q is in dB
+    for (const f of this.filterNodes) {
+      if (f.type === "dc") continue;
+      const hp = f.type === "hp";
+      const freq = hp ? clamp(S.hpf_freq, 5, sr * 0.45) : clamp(S.lpf_freq, 20, sr * 0.49);
+      const q = qdb(hp ? S.hpf_q : S.lpf_q);
+      if (immediate) { f.node.frequency.value = freq; f.node.Q.value = q; }
+      else { f.node.frequency.setTargetAtTime(freq, t, 0.02); f.node.Q.setTargetAtTime(q, t, 0.02); }
+    }
+  }
+
+  /* ---------- sources ---------- */
+  stopSource() {
+    if (this.cleanup) { try { this.cleanup(); } catch (e) {} }
+    this.cleanup = null; this.kind = null; this.label = "No source";
+  }
+
+  async startSystem() {
+    await this.ensureContext();
+    if (!navigator.mediaDevices || !navigator.mediaDevices.getDisplayMedia)
+      throw new Error("This browser can't capture system audio. Please use Chrome or Edge.");
+    const stream = await navigator.mediaDevices.getDisplayMedia({
+      video: { displaySurface: "monitor", frameRate: 1 },
+      audio: { echoCancellation: false, noiseSuppression: false, autoGainControl: false,
+               suppressLocalAudioPlayback: false, channelCount: 2, sampleRate: this.ctx.sampleRate },
+      systemAudio: "include", selfBrowserSurface: "exclude", surfaceSwitching: "exclude", monitorTypeSurfaces: "include",
+    });
+    const audio = stream.getAudioTracks();
+    if (!audio.length) {
+      stream.getTracks().forEach(t => t.stop());
+      throw new Error("No sound was shared. Pick the “Entire screen” tab and turn on “Also share system audio”.");
+    }
+    // We only need the sound. Stop the video right away (nothing is ever drawn or recorded).
+    stream.getVideoTracks().forEach(t => t.stop());
+    this.stopSource();
+    const src = this.ctx.createMediaStreamSource(new MediaStream(audio));
+    src.connect(this.input);
+    const ended = () => { if (this.kind === "system") { this.stopSource(); this.onEnded && this.onEnded("Screen sharing stopped."); } };
+    audio[0].addEventListener("ended", ended);
+    this.cleanup = () => { audio[0].removeEventListener("ended", ended); src.disconnect(); audio.forEach(t => t.stop()); };
+    this.kind = "system"; this.label = "System audio";
+  }
+
+  async startMic(deviceId) {
+    await this.ensureContext();
+    const c = { echoCancellation: false, noiseSuppression: false, autoGainControl: false, channelCount: 2 };
+    if (deviceId) c.deviceId = { exact: deviceId };
+    const stream = await navigator.mediaDevices.getUserMedia({ audio: c });
+    this.stopSource();
+    const track = stream.getAudioTracks()[0];
+    this.micDeviceId = (track.getSettings && track.getSettings().deviceId) || deviceId || "";
+    const src = this.ctx.createMediaStreamSource(stream);
+    src.connect(this.input);
+    this.cleanup = () => { src.disconnect(); stream.getTracks().forEach(t => t.stop()); };
+    this.kind = "mic"; this.label = track.label || "Microphone";
+  }
+
+  async startFile(file) {
+    await this.ensureContext();
+    this.stopSource();
+    const el = new Audio(); el.loop = true; el.src = URL.createObjectURL(file);
+    const src = this.ctx.createMediaElementSource(el);
+    src.connect(this.ctx.destination);         // you hear it
+    src.connect(this.input);                   // and the scope sees it
+    await el.play();
+    this.audioEl = el;
+    this.cleanup = () => { el.pause(); src.disconnect(); URL.revokeObjectURL(el.src); this.audioEl = null; };
+    this.kind = "file"; this.label = file.name;
+  }
+
+  async startDemo() {
+    await this.ensureContext();
+    this.stopSource();
+    const ctx = this.ctx, t = ctx.currentTime;
+    const merger = ctx.createChannelMerger(2), gL = ctx.createGain(), gR = ctx.createGain();
+    const oL = new OscillatorNode(ctx, { frequency: 220 }), oR = new OscillatorNode(ctx, { frequency: 330.35 });
+    const h = new OscillatorNode(ctx, { frequency: 660 }), hg = ctx.createGain();
+    const lfo = new OscillatorNode(ctx, { frequency: 0.07 }), lfoG = ctx.createGain();
+    gL.gain.value = 0.45; gR.gain.value = 0.45; hg.gain.value = 0.12; lfoG.gain.value = 0.12;
+    lfo.connect(lfoG).connect(hg.gain);
+    oL.connect(gL).connect(merger, 0, 0); oR.connect(gR).connect(merger, 0, 1);
+    h.connect(hg); hg.connect(gL);
+    merger.connect(this.input);                // silent: not connected to the speakers
+    const oscs = [oL, oR, h, lfo]; oscs.forEach(o => o.start(t));
+    this.cleanup = () => { oscs.forEach(o => { try { o.stop(); } catch (e) {} }); merger.disconnect(); };
+    this.kind = "demo"; this.label = "Demo signal";
+  }
+}
+const audio = new AudioEngine();
+
+/* =====================================================================
+   GPU renderer (WebGL2)
+   1. beam:    each pair of samples is a quad; the fragment shader integrates a
+               gaussian electron beam along it (smooth joins, true beam width),
+               optionally dimmer where the beam moves fast (like a real CRT).
+               3D rotation / perspective / mirror / spin all happen on the GPU.
+   2. persist: new frame = max(previous * decay, beam)  (phosphor trails, no ghosting)
+   3. bloom:   two blur levels (1/2 and 1/4 res) for the glow
+   4. output:  glow + tone-map + grid
+   ===================================================================== */
+const GLSL_FS_VERT = `#version 300 es
+out vec2 vUv;
+void main(){ vec2 p = vec2(float((gl_VertexID << 1) & 2), float(gl_VertexID & 2)); vUv = p; gl_Position = vec4(p * 2.0 - 1.0, 0.0, 1.0); }`;
+
+const GLSL_PROJECT = `
+uniform mat3 uRot; uniform float uK; uniform bool u3D; uniform float uSpin;
+uniform vec2 uPre; uniform vec2 uPost; uniform vec2 uScale; uniform vec2 uRes;
+vec2 toPixels(vec3 p){
+  p.xy *= uPre;
+  vec2 q;
+  if (u3D) { vec3 r = uRot * p; q = r.xy / clamp(1.0 + uK * r.z, 0.25, 4.0); }
+  else { float c = cos(uSpin), s = sin(uSpin); q = vec2(p.x * c - p.y * s, p.x * s + p.y * c); }
+  q = clamp(q * uPost, -1.5, 1.5);
+  return (q * uScale * 0.5 + 0.5) * uRes;
+}`;
+
+const GLSL_BEAM_VERT = `#version 300 es
+precision highp float;
+layout(location=0) in vec3 aA;
+layout(location=1) in vec3 aB;
+layout(location=2) in vec2 aCorner;
+uniform float uRadius;
+${GLSL_PROJECT}
+out vec2 vUV; out float vLen;
+void main(){
+  vec2 a = toPixels(aA), b = toPixels(aB);
+  vec2 d = b - a; float L = length(d);
+  vec2 dir = L > 1e-4 ? d / L : vec2(1.0, 0.0);
+  vec2 nrm = vec2(-dir.y, dir.x);
+  float along = aCorner.x < 0.0 ? -uRadius : L + uRadius;
+  vec2 pos = a + dir * along + nrm * aCorner.y * uRadius;
+  vUV = vec2(along, aCorner.y * uRadius); vLen = L;
+  gl_Position = vec4(pos / uRes * 2.0 - 1.0, 0.0, 1.0);
+}`;
+
+const GLSL_BEAM_FRAG = `#version 300 es
+precision highp float;
+in vec2 vUV; in float vLen;
+uniform float uSigma; uniform vec3 uColor; uniform float uSpeedDim;
+out vec4 o;
+float erf_(float x){
+  float s = sign(x); x = abs(x);
+  float t = 1.0 / (1.0 + 0.3275911 * x);
+  float y = 1.0 - (((((1.061405429 * t - 1.453152027) * t) + 1.421413741) * t - 0.284496736) * t + 0.254829592) * t * exp(-x * x);
+  return s * y;
+}
+void main(){
+  float k = 0.70710678 / uSigma;
+  float along = 0.5 * (erf_((vLen - vUV.x) * k) - erf_(-vUV.x * k));   // beam integrated over this segment
+  float across = exp(-0.5 * vUV.y * vUV.y / (uSigma * uSigma));
+  float speed = pow(uSigma / max(vLen, 0.25 * uSigma), uSpeedDim);     // fast beam = dimmer (optional)
+  o = vec4(uColor * (along * across * speed), 1.0);
+}`;
+
+const GLSL_DOT_VERT = `#version 300 es
+precision highp float;
+layout(location=0) in vec3 aA;
+uniform float uRadius;
+${GLSL_PROJECT}
+void main(){ vec2 p = toPixels(aA); gl_Position = vec4(p / uRes * 2.0 - 1.0, 0.0, 1.0); gl_PointSize = uRadius * 2.0; }`;
+
+const GLSL_DOT_FRAG = `#version 300 es
+precision highp float;
+uniform float uSigma; uniform float uRadius; uniform vec3 uColor;
+out vec4 o;
+void main(){ vec2 d = (gl_PointCoord - 0.5) * 2.0 * uRadius; o = vec4(uColor * exp(-0.5 * dot(d, d) / (uSigma * uSigma)), 1.0); }`;
+
+const GLSL_PERSIST = `#version 300 es
+precision highp float;
+in vec2 vUv; uniform sampler2D uPrev, uBeam; uniform float uDecay, uFloor; out vec4 o;
+void main(){ vec3 p = max(texture(uPrev, vUv).rgb * uDecay - uFloor, 0.0); o = vec4(max(p, texture(uBeam, vUv).rgb), 1.0); }`;
+
+const GLSL_DOWN = `#version 300 es
+precision highp float;
+in vec2 vUv; uniform sampler2D uSrc; uniform vec2 uTexel; out vec4 o;
+void main(){
+  vec3 c = texture(uSrc, vUv + uTexel * vec2(-1.0, -1.0)).rgb + texture(uSrc, vUv + uTexel * vec2(1.0, -1.0)).rgb
+         + texture(uSrc, vUv + uTexel * vec2(-1.0, 1.0)).rgb + texture(uSrc, vUv + uTexel * vec2(1.0, 1.0)).rgb;
+  o = vec4(c * 0.25, 1.0);
+}`;
+
+const GLSL_BLUR = `#version 300 es
+precision highp float;
+in vec2 vUv; uniform sampler2D uSrc; uniform vec2 uDir; out vec4 o;
+void main(){
+  vec3 c = texture(uSrc, vUv).rgb * 0.227027;
+  c += (texture(uSrc, vUv + uDir * 1.0).rgb + texture(uSrc, vUv - uDir * 1.0).rgb) * 0.1945946;
+  c += (texture(uSrc, vUv + uDir * 2.0).rgb + texture(uSrc, vUv - uDir * 2.0).rgb) * 0.1216216;
+  c += (texture(uSrc, vUv + uDir * 3.0).rgb + texture(uSrc, vUv - uDir * 3.0).rgb) * 0.054054;
+  c += (texture(uSrc, vUv + uDir * 4.0).rgb + texture(uSrc, vUv - uDir * 4.0).rgb) * 0.016216;
+  o = vec4(c, 1.0);
+}`;
+
+const GLSL_COMPOSITE = `#version 300 es
+precision highp float;
+in vec2 vUv;
+uniform sampler2D uAcc, uB1, uB2; uniform float uGlow, uExposure, uGridW; uniform bool uGrid; uniform vec2 uRes;
+out vec4 o;
+void main(){
+  vec3 c = texture(uAcc, vUv).rgb;
+  if (uGlow > 0.0) c += uGlow * (texture(uB1, vUv).rgb * 0.7 + texture(uB2, vUv).rgb * 1.1);
+  c = 1.0 - exp(-c * uExposure);
+  if (uGrid) {
+    vec2 px = vUv * uRes, ctr = uRes * 0.5;
+    float inset = 0.06 * min(uRes.x, uRes.y);
+    float g = 0.0;
+    if (abs(px.x - ctr.x) < uGridW || abs(px.y - ctr.y) < uGridW) g = 0.157;
+    vec2 e = min(px - inset, uRes - inset - px);
+    if (min(e.x, e.y) > -uGridW && (abs(e.x) < uGridW || abs(e.y) < uGridW)) g = 0.235;
+    c = max(c, vec3(g));
+  }
+  o = vec4(c, 1.0);
+}`;
+
+class Renderer {
+  constructor(canvas) {
+    this.canvas = canvas;
+    const gl = canvas.getContext("webgl2", { alpha: false, antialias: false, depth: false, stencil: false,
+      premultipliedAlpha: false, preserveDrawingBuffer: false, powerPreference: "high-performance", desynchronized: true });
+    if (!gl) throw new Error("WebGL2 isn't available. Update your browser or graphics driver, or turn on hardware acceleration.");
+    this.gl = gl;
+    this.floatOK = !!gl.getExtension("EXT_color_buffer_float");
+    this.progBeam = this._prog(GLSL_BEAM_VERT, GLSL_BEAM_FRAG);
+    this.progDot = this._prog(GLSL_DOT_VERT, GLSL_DOT_FRAG);
+    this.progPersist = this._prog(GLSL_FS_VERT, GLSL_PERSIST);
+    this.progDown = this._prog(GLSL_FS_VERT, GLSL_DOWN);
+    this.progBlur = this._prog(GLSL_FS_VERT, GLSL_BLUR);
+    this.progComp = this._prog(GLSL_FS_VERT, GLSL_COMPOSITE);
+    this.u = new Map();
+
+    this.pointBuf = gl.createBuffer();
+    this.cornerBuf = gl.createBuffer();
+    gl.bindBuffer(gl.ARRAY_BUFFER, this.cornerBuf);
+    gl.bufferData(gl.ARRAY_BUFFER, new Float32Array([-1, -1, 1, -1, -1, 1, 1, 1]), gl.STATIC_DRAW);
+
+    this.vaoBeam = gl.createVertexArray();
+    gl.bindVertexArray(this.vaoBeam);
+    gl.bindBuffer(gl.ARRAY_BUFFER, this.cornerBuf);
+    gl.enableVertexAttribArray(2); gl.vertexAttribPointer(2, 2, gl.FLOAT, false, 0, 0);
+    gl.bindBuffer(gl.ARRAY_BUFFER, this.pointBuf);
+    gl.enableVertexAttribArray(0); gl.vertexAttribDivisor(0, 1);
+    gl.enableVertexAttribArray(1); gl.vertexAttribDivisor(1, 1);
+    this.vaoDot = gl.createVertexArray();
+    gl.bindVertexArray(this.vaoDot);
+    gl.bindBuffer(gl.ARRAY_BUFFER, this.pointBuf);
+    gl.enableVertexAttribArray(0);
+    this.vaoEmpty = gl.createVertexArray();
+    gl.bindVertexArray(null);
+    this.w = this.h = 0;
+    this.targets = null;
+  }
+
+  _prog(vs, fs) {
+    const gl = this.gl;
+    const sh = (type, src) => {
+      const s = gl.createShader(type); gl.shaderSource(s, src); gl.compileShader(s);
+      if (!gl.getShaderParameter(s, gl.COMPILE_STATUS)) throw new Error("Shader error: " + gl.getShaderInfoLog(s));
+      return s;
+    };
+    const p = gl.createProgram();
+    gl.attachShader(p, sh(gl.VERTEX_SHADER, vs)); gl.attachShader(p, sh(gl.FRAGMENT_SHADER, fs));
+    gl.linkProgram(p);
+    if (!gl.getProgramParameter(p, gl.LINK_STATUS)) throw new Error("Link error: " + gl.getProgramInfoLog(p));
+    return p;
+  }
+  _loc(p, name) {
+    let m = this.u.get(p); if (!m) { m = {}; this.u.set(p, m); }
+    if (!(name in m)) m[name] = this.gl.getUniformLocation(p, name);
+    return m[name];
+  }
+  _target(w, h) {
+    const gl = this.gl, tex = gl.createTexture();
+    gl.bindTexture(gl.TEXTURE_2D, tex);
+    const make = f => f
+      ? gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA16F, w, h, 0, gl.RGBA, gl.HALF_FLOAT, null)
+      : gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA8, w, h, 0, gl.RGBA, gl.UNSIGNED_BYTE, null);
+    make(this.floatOK);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+    const fb = gl.createFramebuffer();
+    gl.bindFramebuffer(gl.FRAMEBUFFER, fb);
+    gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.TEXTURE_2D, tex, 0);
+    if (this.floatOK && gl.checkFramebufferStatus(gl.FRAMEBUFFER) !== gl.FRAMEBUFFER_COMPLETE) {
+      this.floatOK = false; make(false);            // fall back to 8-bit targets
+    }
+    gl.clearColor(0, 0, 0, 1); gl.clear(gl.COLOR_BUFFER_BIT);
+    gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+    return { tex, fb, w, h };
+  }
+  resize(w, h) {
+    if (w === this.w && h === this.h && this.targets) return;
+    const gl = this.gl;
+    if (this.targets) for (const t of Object.values(this.targets)) { gl.deleteTexture(t.tex); gl.deleteFramebuffer(t.fb); }
+    this.w = w; this.h = h;
+    const w2 = Math.max(1, w >> 1), h2 = Math.max(1, h >> 1), w4 = Math.max(1, w >> 2), h4 = Math.max(1, h >> 2);
+    this.targets = {
+      beam: this._target(w, h), accA: this._target(w, h), accB: this._target(w, h),
+      h1: this._target(w2, h2), h2: this._target(w2, h2), q1: this._target(w4, h4), q2: this._target(w4, h4),
+    };
+  }
+  _pass(prog, target, texs, uniforms) {
+    const gl = this.gl;
+    gl.useProgram(prog);
+    gl.bindFramebuffer(gl.FRAMEBUFFER, target ? target.fb : null);
+    gl.viewport(0, 0, target ? target.w : this.w, target ? target.h : this.h);
+    let unit = 0;
+    for (const [name, t] of Object.entries(texs)) {
+      gl.activeTexture(gl.TEXTURE0 + unit); gl.bindTexture(gl.TEXTURE_2D, t.tex);
+      gl.uniform1i(this._loc(prog, name), unit++);
+    }
+    for (const [name, v] of Object.entries(uniforms)) {
+      const loc = this._loc(prog, name);
+      if (typeof v === "boolean") gl.uniform1i(loc, v ? 1 : 0);
+      else if (typeof v === "number") gl.uniform1f(loc, v);
+      else if (v.length === 2) gl.uniform2fv(loc, v);
+      else gl.uniform3fv(loc, v);
+    }
+    gl.bindVertexArray(this.vaoEmpty);
+    gl.drawArrays(gl.TRIANGLES, 0, 3);
+  }
+
+  /** p: { data, ranges:[[startPoint,count]], mirrors:[[sx,sy]], preMirror, rot, use3D, K, spin,
+          sigma, color, speedDim, dots, decay, floor, glow, glowRadius, exposure, grid, gridW } */
+  draw(p) {
+    const gl = this.gl, T = this.targets, W = this.w, H = this.h;
+    // ---- 1. beam ----
+    gl.bindFramebuffer(gl.FRAMEBUFFER, T.beam.fb);
+    gl.viewport(0, 0, W, H);
+    gl.clearColor(0, 0, 0, 1); gl.clear(gl.COLOR_BUFFER_BIT);
+    if (p.ranges.length) {
+      gl.enable(gl.BLEND); gl.blendFunc(gl.ONE, gl.ONE); gl.blendEquation(gl.FUNC_ADD);
+      gl.bindBuffer(gl.ARRAY_BUFFER, this.pointBuf);
+      gl.bufferData(gl.ARRAY_BUFFER, p.data, gl.DYNAMIC_DRAW);
+      const prog = p.dots ? this.progDot : this.progBeam;
+      gl.useProgram(prog);
+      const s = Math.min(W, H) * 0.88 / 2;
+      const radius = p.dots ? Math.max(1.5, p.sigma * 3) : p.sigma * 3.5 + 1;
+      gl.uniformMatrix3fv(this._loc(prog, "uRot"), false, p.rot);
+      gl.uniform1f(this._loc(prog, "uK"), p.K);
+      gl.uniform1i(this._loc(prog, "u3D"), p.use3D ? 1 : 0);
+      gl.uniform1f(this._loc(prog, "uSpin"), p.spin);
+      gl.uniform2f(this._loc(prog, "uScale"), s / (W / 2), s / (H / 2));
+      gl.uniform2f(this._loc(prog, "uRes"), W, H);
+      gl.uniform1f(this._loc(prog, "uRadius"), radius);
+      gl.uniform1f(this._loc(prog, "uSigma"), p.sigma);
+      gl.uniform3fv(this._loc(prog, "uColor"), p.color);
+      if (!p.dots) gl.uniform1f(this._loc(prog, "uSpeedDim"), p.speedDim);
+      const uPre = this._loc(prog, "uPre"), uPost = this._loc(prog, "uPost");
+      gl.bindVertexArray(p.dots ? this.vaoDot : this.vaoBeam);
+      for (const [start, count] of p.ranges) {
+        if (count < 2) continue;
+        if (p.dots) gl.vertexAttribPointer(0, 3, gl.FLOAT, false, 12, start * 12);
+        else {
+          gl.vertexAttribPointer(0, 3, gl.FLOAT, false, 12, start * 12);
+          gl.vertexAttribPointer(1, 3, gl.FLOAT, false, 12, (start + 1) * 12);
+        }
+        for (const m of p.mirrors) {
+          gl.uniform2f(uPre, p.preMirror ? m[0] : 1, p.preMirror ? m[1] : 1);
+          gl.uniform2f(uPost, p.preMirror ? 1 : m[0], p.preMirror ? 1 : m[1]);
+          if (p.dots) gl.drawArrays(gl.POINTS, 0, count);
+          else gl.drawArraysInstanced(gl.TRIANGLE_STRIP, 0, 4, count - 1);
+        }
+      }
+      gl.disable(gl.BLEND);
+    }
+    // ---- 2. persistence ----
+    this._pass(this.progPersist, T.accB, { uPrev: T.accA, uBeam: T.beam },
+      { uDecay: p.decay, uFloor: this.floatOK ? 0.0004 : 1.5 / 255 });
+    [T.accA, T.accB] = [T.accB, T.accA];
+    const acc = T.accA;
+    // ---- 3. bloom ----
+    if (p.glow > 0) {
+      const r = p.glowRadius;
+      this._pass(this.progDown, T.h1, { uSrc: acc }, { uTexel: [1 / W, 1 / H] });
+      this._pass(this.progBlur, T.h2, { uSrc: T.h1 }, { uDir: [r / T.h1.w, 0] });
+      this._pass(this.progBlur, T.h1, { uSrc: T.h2 }, { uDir: [0, r / T.h1.h] });
+      this._pass(this.progDown, T.q1, { uSrc: T.h1 }, { uTexel: [1 / T.h1.w, 1 / T.h1.h] });
+      this._pass(this.progBlur, T.q2, { uSrc: T.q1 }, { uDir: [r / T.q1.w, 0] });
+      this._pass(this.progBlur, T.q1, { uSrc: T.q2 }, { uDir: [0, r / T.q1.h] });
+    }
+    // ---- 4. output ----
+    this._pass(this.progComp, null, { uAcc: acc, uB1: T.h1, uB2: T.q1 },
+      { uGlow: p.glow, uExposure: p.exposure, uGrid: p.grid, uGridW: p.gridW, uRes: [W, H] });
+  }
+}
+
+/** 3x3 rotation (column-major) matching the Python order: roll(Z) -> pitch(X) -> yaw(Y). */
+function rotationMatrix(rollDeg, pitchDeg, yawDeg) {
+  const r = rollDeg * Math.PI / 180, p = pitchDeg * Math.PI / 180, y = yawDeg * Math.PI / 180;
+  const cr = Math.cos(r), sr = Math.sin(r), cp = Math.cos(p), sp = Math.sin(p), cy = Math.cos(y), sy = Math.sin(y);
+  const f = (x, yy, z) => {
+    const x1 = x * cr - yy * sr, y1 = x * sr + yy * cr, z1 = z;
+    const y2 = y1 * cp - z1 * sp, z2 = y1 * sp + z1 * cp, x2 = x1;
+    return [x2 * cy + z2 * sy, y2, -x2 * sy + z2 * cy];
+  };
+  return new Float32Array([...f(1, 0, 0), ...f(0, 1, 0), ...f(0, 0, 1)]);
+}
+
+/* =====================================================================
+   Settings panel
+   ===================================================================== */
+const $ = s => document.querySelector(s);
+const RESET_SVG = '<svg viewBox="0 0 16 16" aria-hidden="true"><path d="M3.2 8.2A4.8 4.8 0 1 0 5 4.3" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/><path d="M2.4 2.2v3.7h3.7" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>';
+const FILTER_KEYS = new Set(["dc_on", "dc_cut", "hpf_on", "hpf_freq", "hpf_q", "hpf_slope", "lpf_on", "lpf_freq", "lpf_q", "lpf_slope"]);
+const ALL_ROWS = [];
+
+function setSetting(key, v) {
+  if (approxEq(S[key], v)) return;
+  S[key] = v; saveSettings(); onSettingChanged(key); syncUI(true);
+}
+function resetKeys(keys) { for (const k of keys) setSetting(k, DEFAULTS[k]); }
+function onSettingChanged(key) {
+  if (FILTER_KEYS.has(key)) audio.rebuildFilters();
+  if (key === "render_scale") resizeCanvas();
+}
+function el(tag, cls, html) { const e = document.createElement(tag); if (cls) e.className = cls; if (html != null) e.innerHTML = html; return e; }
+function esc(s) { return String(s).replace(/[&<>"]/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c])); }
+
+function makeRow(cls, keys, en) {
+  const row = { el: el("div", "row " + cls), keys, en, last: {} };
+  if (keys.length) {
+    const b = el("button", "reset", RESET_SVG); b.title = "Reset to default"; b.type = "button";
+    b.addEventListener("click", ev => { ev.stopPropagation(); resetKeys(keys); });
+    row.el.appendChild(b);
+  }
+  row.syncBase = () => {
+    const changed = keys.some(k => !approxEq(S[k], DEFAULTS[k]));
+    const dim = en ? !en(S) : false;
+    if (row.last.changed !== changed) { row.el.classList.toggle("changed", changed); row.last.changed = changed; }
+    if (row.last.dim !== dim) { row.el.classList.toggle("dim", dim); row.last.dim = dim; }
+  };
+  row.sync = row.syncBase;
+  ALL_ROWS.push(row);
+  return row;
+}
+const enK = k => s => !!s[k];
+
+function Header(text) { const r = makeRow("header", []); r.el.textContent = text; return r; }
+function Note(text) {
+  const r = makeRow("note", []);
+  r.sync = () => { const t = typeof text === "function" ? text(S) : text; if (r.last.t !== t) { r.el.textContent = t; r.last.t = t; } };
+  return r;
+}
+function Toggle(key, label, o = {}) {
+  const r = makeRow("toggle", [key], o.en);
+  const line = el("div", "line"), sw = el("button", "switch"); sw.type = "button"; sw.setAttribute("role", "switch");
+  line.append(sw, el("span", "lab", esc(label)));
+  r.el.prepend(line);
+  r.el.addEventListener("click", () => setSetting(key, !S[key]));
+  r.sync = () => { r.syncBase(); const on = !!S[key]; if (r.last.on !== on) { sw.classList.toggle("on", on); sw.setAttribute("aria-checked", on); r.last.on = on; } };
+  return r;
+}
+function Slider(key, label, lo, hi, o = {}) {
+  const r = makeRow("slider", [key], o.en);
+  const step = o.step || 0, log = !!o.log, sig = o.sig || 0;
+  const isInt = Number.isInteger(DEFAULTS[key]) && (step >= 1 || sig);
+  const fmt = o.fmt || (v => v.toFixed(2));
+  const quant = v => {
+    v = clamp(+v, lo, hi);
+    if (sig && v !== 0) { const d = sig - 1 - Math.floor(Math.log10(Math.abs(v))); const f = Math.pow(10, d); v = Math.round(v * f) / f; }
+    else if (step) v = Math.round((v - lo) / step) * step + lo;
+    v = clamp(+v.toFixed(6), lo, hi);
+    return isInt ? Math.round(v) : v;
+  };
+  const toT = v => log ? Math.log(clamp(v, lo, hi) / lo) / Math.log(hi / lo) : (clamp(v, lo, hi) - lo) / (hi - lo);
+  const line = el("div", "line"), lab = el("span", "lab", esc(label)), val = el("span", "val");
+  line.append(lab, val);
+  const inp = el("input"); inp.type = "range";
+  if (log) { inp.min = 0; inp.max = 1000; inp.step = 1; } else { inp.min = lo; inp.max = hi; inp.step = step || "any"; }
+  if (o.fill) inp.style.setProperty("--fill", o.fill);
+  inp.setAttribute("aria-label", label);
+  r.el.prepend(line, inp);
+  inp.addEventListener("input", () => {
+    const v = log ? lo * Math.pow(hi / lo, inp.value / 1000) : +inp.value;
+    setSetting(key, quant(v));
+  });
+  const reset = ev => { ev.preventDefault(); setSetting(key, DEFAULTS[key]); };
+  r.el.addEventListener("contextmenu", reset);
+  inp.addEventListener("dblclick", reset);
+  r.sync = () => {
+    r.syncBase();
+    const v = S[key];
+    if (r.last.v === v) return;
+    r.last.v = v;
+    const t = toT(v);
+    if (!r.dragging) inp.value = log ? Math.round(t * 1000) : v;
+    inp.style.setProperty("--pct", (t * 100).toFixed(2) + "%");
+    val.textContent = fmt(v);
+  };
+  inp.addEventListener("pointerdown", () => { r.dragging = true; });
+  window.addEventListener("pointerup", () => { if (r.dragging) { r.dragging = false; r.last.v = undefined; r.sync(); } });
+  r.quant = quant;
+  return r;
+}
+function Choice(key, label, options, o = {}) {
+  const r = makeRow("choice", [key], o.en);
+  const line = el("div", "line"), seg = el("div", "seg");
+  line.append(el("span", "lab", esc(label)), seg);
+  const btns = options.map(([v, t]) => {
+    const b = el("button", "", esc(t)); b.type = "button";
+    b.addEventListener("click", () => setSetting(key, v)); seg.appendChild(b); return [v, b];
+  });
+  r.el.prepend(line);
+  r.sync = () => { r.syncBase(); const v = S[key]; if (r.last.v === v) return; r.last.v = v; btns.forEach(([bv, b]) => b.classList.toggle("sel", approxEq(bv, v))); };
+  return r;
+}
+function Swatches(key, o = {}) {
+  const r = makeRow("swatch-row", [key], o.en);
+  const wrap = el("div", "swatches");
+  const btns = PALETTE.map(([c, name], i) => {
+    const b = el("button", "swatch"); b.type = "button"; b.style.background = c; b.title = name;
+    b.addEventListener("click", () => setSetting(key, i)); wrap.appendChild(b); return b;
+  });
+  r.el.prepend(wrap);
+  r.sync = () => { r.syncBase(); const v = S[key]; if (r.last.v === v) return; r.last.v = v; btns.forEach((b, i) => b.classList.toggle("sel", i === v)); };
+  return r;
+}
+function ColorPick(key, label, o = {}) {
+  const r = makeRow("color", [key], o.en);
+  const line = el("div", "line"), inp = el("input"); inp.type = "color";
+  line.append(el("span", "lab", esc(label)), inp);
+  r.el.prepend(line);
+  inp.addEventListener("input", () => setSetting(key, inp.value));
+  r.sync = () => { r.syncBase(); if (r.last.v !== S[key]) { inp.value = S[key]; r.last.v = S[key]; } };
+  return r;
+}
+function Meter(label, fn) {
+  const r = makeRow("meter-row", []);
+  const line = el("div", "line"), bar = el("div", "meter"), fill = el("i"), txt = el("span", "val");
+  bar.appendChild(fill); txt.style.minWidth = "78px"; txt.style.textAlign = "right"; txt.style.fontSize = "12px";
+  const lab = el("span", "lab", esc(label)); lab.style.flex = "0 0 104px"; lab.style.color = "var(--dim)";
+  line.append(lab, bar, txt);
+  r.el.prepend(line);
+  r.live = true;
+  r.sync = () => {
+    const [f, t, c] = fn(S);
+    fill.style.width = (clamp(f, 0, 1) * 100).toFixed(1) + "%";
+    if (r.last.c !== c) { fill.style.background = c; r.last.c = c; }
+    if (r.last.t !== t) { txt.textContent = t; r.last.t = t; }
+  };
+  return r;
+}
+function SourceRow() {
+  const r = makeRow("source-row", []);
+  const line = el("div"); line.style.cssText = "display:grid;grid-template-columns:1fr 1fr;gap:6px";
+  const opts = [["system", "System audio"], ["file", "File…"], ["mic", "Mic / line-in"], ["demo", "Demo"]];
+  const btns = opts.map(([k, t]) => {
+    const b = el("button", "btn", esc(t)); b.type = "button";
+    b.addEventListener("click", () => chooseSource(k)); line.appendChild(b); return [k, b];
+  });
+  const status = el("div", "note"); status.style.padding = "6px 0 0";
+  r.el.append(line, status);
+  r.sync = () => {
+    const k = audio.kind, lab = audio.label;
+    if (r.last.k !== k || r.last.l !== lab) {
+      btns.forEach(([bk, b]) => b.classList.toggle("sel", bk === k));
+      status.textContent = k ? "Now showing: " + lab : "No audio source selected.";
+      r.last.k = k; r.last.l = lab;
+    }
+  };
+  return r;
+}
+function MicSelect() {
+  const r = makeRow("mic-row", []);
+  const sel = el("select"); sel.setAttribute("aria-label", "Input device");
+  r.el.append(el("div", "line", '<span class="lab">Input device</span>'), sel);
+  sel.addEventListener("change", () => startSource(() => audio.startMic(sel.value)));
+  r.refresh = async () => {
+    try {
+      const devs = (await navigator.mediaDevices.enumerateDevices()).filter(d => d.kind === "audioinput");
+      sel.innerHTML = devs.map(d => `<option value="${esc(d.deviceId)}">${esc(d.label || "Input " + d.deviceId.slice(0, 6))}</option>`).join("");
+      sel.value = audio.micDeviceId;
+    } catch (e) {}
+  };
+  r.sync = () => {
+    const show = audio.kind === "mic";
+    if (r.last.show !== show) { r.el.classList.toggle("hidden", !show); r.last.show = show; if (show) r.refresh(); }
+  };
+  return r;
+}
+
+const fmtHz = v => v < 1000 ? `${Math.round(v)} Hz` : `${(v / 1000).toFixed(2)} kHz`;
+const fmtDeg = v => `${v >= 0 ? "+" : ""}${v.toFixed(1)}°`;
+const fmtRate = v => `${Math.round(v)}°/s`;
+const stats = { peak: 0, gain: 1, stale: true };
+
+const TABS = [
+  ["Display", [
+    Header("Beam"),
+    Choice("draw_mode", "Draw mode", [["line", "Line"], ["dots", "Dots"]]),
+    Slider("thickness", "Beam width", 0.5, 10, { step: 0.25, fmt: v => v.toFixed(2) + " px" }),
+    Slider("brightness", "Brightness", 0.3, 6, { log: true, sig: 2, fmt: v => v.toFixed(2) + "×" }),
+    Slider("speed_dim", "Analog beam dimming", 0, 1, { step: 0.05, en: s => s.draw_mode === "line" }),
+    Toggle("grid", "Show grid  (G)"),
+    Header("Glow"),
+    Toggle("glow_on", "GPU glow (bloom)"),
+    Slider("glow_strength", "Glow strength", 0, 3, { step: 0.05, en: enK("glow_on") }),
+    Slider("glow_radius", "Glow radius", 0.25, 4, { step: 0.05, en: enK("glow_on") }),
+    Header("Trails"),
+    Toggle("trails", "Phosphor trails"),
+    Slider("trail_persist", "Persistence", 0, 0.99, { step: 0.01, en: enK("trails") }),
+    Header("Time window"),
+    Slider("window_samples", "Samples shown", 200, 48000, { log: true, sig: 2,
+      fmt: v => `${v}  (${(v / audio.sampleRate * 1000).toFixed(0)} ms)` }),
+    Header("Performance"),
+    Choice("render_scale", "Resolution", [[1, "Full"], [0.75, "75%"], [0.5, "Half"]]),
+    Note("Tip: right-click or double-click any slider to reset it."),
+  ]],
+  ["Shape", [
+    Header("Circular wave"),
+    Toggle("circ_on", "Circular wave mode"),
+    Choice("circ_src", "Source", [["Mono", "Mono"], ["Left", "Left"], ["Right", "Right"]], { en: enK("circ_on") }),
+    Slider("circ_base", "Base radius", 0.2, 1.5, { step: 0.01, en: enK("circ_on") }),
+    Slider("circ_rad", "Radial scale", 0, 1, { step: 0.01, en: enK("circ_on") }),
+    Slider("circ_extra", "Extra great circles", 0, 11, { step: 1, fmt: v => String(v), en: enK("circ_on") }),
+    Header("Symmetry mirror"),
+    Toggle("mirror_on", "Mirror"),
+    Choice("mirror_mode", "Mirror axes", [["X", "X"], ["Y", "Y"], ["XY", "XY"]], { en: enK("mirror_on") }),
+    Toggle("mirror_pre3d", "Mirror before rotation", { en: enK("mirror_on") }),
+  ]],
+  ["Motion", [
+    Header("3D projection"),
+    Toggle("rot3d", "3D enabled"),
+    Slider("persp", "Perspective", -2, 2, { step: 0.05, fmt: v => (v >= 0 ? "+" : "") + v.toFixed(2), en: enK("rot3d") }),
+    Slider("depth", "Depth", 0.1, 3, { step: 0.05, en: enK("rot3d") }),
+    Header("Yaw  (Y axis)"),
+    Slider("yaw", "Yaw", -180, 180, { step: 0.5, fmt: fmtDeg, en: enK("rot3d") }),
+    Toggle("auto_yaw", "Auto-rotate yaw", { en: enK("rot3d") }),
+    Slider("yaw_rate", "Yaw rate", 1, 720, { step: 1, fmt: fmtRate, en: s => s.rot3d && s.auto_yaw }),
+    Header("Pitch  (X axis)"),
+    Slider("pitch", "Pitch", -180, 180, { step: 0.5, fmt: fmtDeg, en: enK("rot3d") }),
+    Toggle("auto_pitch", "Auto-rotate pitch", { en: enK("rot3d") }),
+    Slider("pitch_rate", "Pitch rate", 1, 720, { step: 1, fmt: fmtRate, en: s => s.rot3d && s.auto_pitch }),
+    Header("Roll  (Z axis)"),
+    Slider("roll", "Roll", -180, 180, { step: 0.5, fmt: fmtDeg, en: enK("rot3d") }),
+    Toggle("auto_roll", "Auto-rotate roll", { en: enK("rot3d") }),
+    Slider("roll_rate", "Roll rate", 1, 720, { step: 1, fmt: fmtRate, en: s => s.rot3d && s.auto_roll }),
+    Header("2D spin"),
+    Toggle("spin_on", "Spin"),
+    Slider("spin_rate", "Spin rate", 1, 720, { step: 1, fmt: fmtRate, en: enK("spin_on") }),
+    Choice("spin_dir", "Direction", [["CCW", "CCW"], ["CW", "CW"]], { en: enK("spin_on") }),
+  ]],
+  ["Color", [
+    Header("Preset  (C cycles)"),
+    Swatches("palette_idx", { en: s => !s.custom_on && !s.cycle_on }),
+    Note(s => PALETTE[s.palette_idx % PALETTE.length][1]),
+    Header("Custom colour"),
+    Toggle("custom_on", "Use custom colour"),
+    ColorPick("custom_color", "Colour", { en: enK("custom_on") }),
+    Header("Colour cycle"),
+    Toggle("cycle_on", "Cycle through hues"),
+    Slider("cycle_rate", "Cycle rate", 1, 720, { step: 1, fmt: fmtRate, en: enK("cycle_on") }),
+    Note("Priority: Custom  >  Cycle  >  Preset. With trails on, cycling leaves rainbow trails."),
+  ]],
+  ["Audio", [
+    Header("Source  (A)"),
+    SourceRow(),
+    MicSelect(),
+    Meter("Input level", () => {
+      if (stats.stale) return [0, "no audio", "var(--dim)"];
+      const db = 20 * Math.log10(Math.max(stats.peak, 1e-6));
+      return [(db + 60) / 60, `${db.toFixed(1)} dBFS`, stats.peak >= 0.99 ? "var(--warn)" : "var(--accent)"];
+    }),
+    Header("Gain"),
+    Toggle("agc_on", "Auto gain (AGC)"),
+    Slider("gain", "Manual gain", 0.2, 5, { step: 0.05, fmt: v => v.toFixed(2) + "×", en: s => !s.agc_on }),
+    Slider("agc_target", "AGC target level", 0.2, 1.2, { step: 0.05, en: enK("agc_on") }),
+    Slider("agc_max", "AGC max gain", 1, 20, { step: 0.5, fmt: v => v.toFixed(1) + "×", en: enK("agc_on") }),
+    Slider("agc_attack_ms", "AGC attack", 5, 500, { log: true, sig: 2, fmt: v => `${Math.round(v)} ms`, en: enK("agc_on") }),
+    Slider("agc_release_ms", "AGC release", 50, 5000, { log: true, sig: 2, fmt: v => `${Math.round(v)} ms`, en: enK("agc_on") }),
+    Meter("Applied gain", s => {
+      const hi = Math.max(s.agc_max, s.gain, 1);
+      return [Math.log(Math.max(stats.gain, AGC_MIN_GAIN) / AGC_MIN_GAIN) / Math.log(hi / AGC_MIN_GAIN),
+              stats.gain.toFixed(2) + "×", s.agc_on ? "var(--accent)" : "var(--dim)"];
+    }),
+    Header("Noise gate"),
+    Toggle("gate_on", "Noise gate"),
+    Slider("noise_floor", "Gate threshold", 0, 0.3, { step: 0.01, en: enK("gate_on") }),
+  ]],
+  ["Filters", [
+    Header("DC block"),
+    Toggle("dc_on", "DC block"),
+    Slider("dc_cut", "Cutoff", 0.1, 10, { step: 0.1, fmt: v => v.toFixed(1) + " Hz", en: enK("dc_on") }),
+    Header("High-pass"),
+    Toggle("hpf_on", "High-pass filter"),
+    Slider("hpf_freq", "Frequency", 10, 20000, { log: true, sig: 3, fmt: fmtHz, en: enK("hpf_on") }),
+    Slider("hpf_q", "Q", 0.3, 2, { step: 0.01, en: enK("hpf_on") }),
+    Choice("hpf_slope", "Slope", [[12, "12 dB/oct"], [24, "24 dB/oct"]], { en: enK("hpf_on") }),
+    Header("Low-pass"),
+    Toggle("lpf_on", "Low-pass filter"),
+    Slider("lpf_freq", "Frequency", 10, 20000, { log: true, sig: 3, fmt: fmtHz, en: enK("lpf_on") }),
+    Slider("lpf_q", "Q", 0.3, 2, { step: 0.01, en: enK("lpf_on") }),
+    Choice("lpf_slope", "Slope", [[12, "12 dB/oct"], [24, "24 dB/oct"]], { en: enK("lpf_on") }),
+  ]],
+];
+
+// Build DOM
+const tabsEl = $("#tabs"), contentEl = $("#content");
+let curTab = 0;
+const tabViews = TABS.map(([name, rows], i) => {
+  const b = el("button", "tab", `${esc(name)}<span class="dot"></span>`); b.type = "button"; b.setAttribute("role", "tab");
+  b.addEventListener("click", () => selectTab(i));
+  tabsEl.appendChild(b);
+  const view = el("div", "view hidden"); rows.forEach(r => view.appendChild(r.el)); contentEl.appendChild(view);
+  const keys = rows.flatMap(r => r.keys);
+  return { b, view, rows, keys };
+});
+function selectTab(i) {
+  curTab = i;
+  tabViews.forEach((t, j) => { t.b.classList.toggle("sel", j === i); t.view.classList.toggle("hidden", j !== i); });
+  contentEl.scrollTop = 0;
+  syncUI(true);
+}
+function syncUI(all = false) {
+  if (panelEl.classList.contains("hidden") && !all) return;
+  const view = tabViews[curTab];
+  for (const r of (all ? ALL_ROWS : view.rows)) r.sync();
+  for (const t of tabViews) {
+    const ch = t.keys.some(k => !approxEq(S[k], DEFAULTS[k]));
+    if (t.changed !== ch) { t.b.classList.toggle("changed", ch); t.changed = ch; }
+  }
+}
+// Sanitize loaded settings against the controls' ranges
+for (const r of ALL_ROWS) if (r.quant) for (const k of r.keys) if (!approxEq(S[k], DEFAULTS[k])) S[k] = r.quant(S[k]);
+
+const panelEl = $("#panel"), settingsBtn = $("#settingsBtn");
+function setPanel(open) {
+  panelEl.classList.toggle("hidden", !open); settingsBtn.classList.toggle("open", open);
+  settingsBtn.textContent = open ? "Close" : "Settings";
+  if (open) syncUI(true);
+}
+settingsBtn.addEventListener("click", () => setPanel(panelEl.classList.contains("hidden")));
+selectTab(0);
+$("#resetTab").addEventListener("click", () => resetKeys(tabViews[curTab].keys));
+let resetArmed = 0;
+$("#resetAll").addEventListener("click", ev => {
+  const b = ev.currentTarget;
+  if (performance.now() < resetArmed) { resetKeys(Object.keys(DEFAULTS)); resetArmed = 0; b.textContent = "Reset all"; b.classList.remove("warn"); return; }
+  resetArmed = performance.now() + 3000; b.textContent = "Sure?"; b.classList.add("warn");
+  setTimeout(() => { if (performance.now() >= resetArmed) { b.textContent = "Reset all"; b.classList.remove("warn"); } }, 3100);
+});
+
+/* =====================================================================
+   Sources / overlays
+   ===================================================================== */
+const startEl = $("#start"), startMsg = $("#startMsg"), helpEl = $("#help"), fileInput = $("#fileInput");
+function showStart(msg) {
+  startMsg.textContent = msg || ""; startMsg.classList.toggle("hidden", !msg);
+  startEl.classList.remove("hidden");
+}
+async function startSource(fn) {
+  try {
+    await fn();
+    startEl.classList.add("hidden");
+    syncUI(true);
+  } catch (e) {
+    let m = e && e.message ? e.message : String(e);
+    if (e && e.name === "NotAllowedError") m = "Permission was denied or the picker was cancelled.";
+    if (e && e.name === "NotFoundError") m = "No suitable device was found.";
+    showStart(m);
+    syncUI(true);
+  }
+}
+function chooseSource(kind) {
+  if (kind === "system") startSource(() => audio.startSystem());
+  else if (kind === "mic") startSource(() => audio.startMic(""));
+  else if (kind === "demo") startSource(() => audio.startDemo());
+  else if (kind === "file") { fileInput.value = ""; fileInput.click(); }
+}
+document.querySelectorAll(".src").forEach(b => b.addEventListener("click", () => chooseSource(b.dataset.src)));
+fileInput.addEventListener("change", () => { const f = fileInput.files[0]; if (f) startSource(() => audio.startFile(f)); });
+audio.onEnded = msg => { showStart(msg + " Choose a source to continue."); syncUI(true); };
+if (/firefox/i.test(navigator.userAgent)) {
+  showStart("Firefox can't capture system audio. Use Chrome or Edge for that — files, mic and demo work here.");
+}
+
+// Drag & drop audio files anywhere
+let dragDepth = 0;
+window.addEventListener("dragenter", e => { e.preventDefault(); dragDepth++; $("#dropHint").classList.remove("hidden"); });
+window.addEventListener("dragleave", e => { e.preventDefault(); if (--dragDepth <= 0) { dragDepth = 0; $("#dropHint").classList.add("hidden"); } });
+window.addEventListener("dragover", e => e.preventDefault());
+window.addEventListener("drop", e => {
+  e.preventDefault(); dragDepth = 0; $("#dropHint").classList.add("hidden");
+  const f = e.dataTransfer && e.dataTransfer.files[0];
+  if (f) startSource(() => audio.startFile(f));
+});
+
+$("#helpClose").addEventListener("click", () => helpEl.classList.add("hidden"));
+helpEl.addEventListener("click", e => { if (e.target === helpEl) helpEl.classList.add("hidden"); });
+startEl.addEventListener("click", e => { if (e.target === startEl && audio.kind) startEl.classList.add("hidden"); });
+
+function toggleFullscreen() {
+  if (document.fullscreenElement) document.exitFullscreen().catch(() => {});
+  else document.documentElement.requestFullscreen().catch(() => {});
+}
+window.addEventListener("keydown", e => {
+  const t = e.target;
+  if (t && (t.tagName === "SELECT" || (t.tagName === "INPUT" && t.type !== "range"))) return;
+  if (e.ctrlKey || e.metaKey || e.altKey) return;
+  const k = e.key.toLowerCase();
+  if (k === "escape") {
+    if (!helpEl.classList.contains("hidden")) helpEl.classList.add("hidden");
+    else if (!startEl.classList.contains("hidden") && audio.kind) startEl.classList.add("hidden");
+    else if (!panelEl.classList.contains("hidden")) setPanel(false);
+    return;
+  }
+  if (k === "h" || k === "?") helpEl.classList.toggle("hidden");
+  else if (k === "s") { document.body.classList.remove("ui-hidden"); setPanel(panelEl.classList.contains("hidden")); }
+  else if (k === "z") document.body.classList.toggle("ui-hidden");
+  else if (k === "f" || k === "x") toggleFullscreen();
+  else if (k === "g") setSetting("grid", !S.grid);
+  else if (k === "a") showStart("");
+  else if (k === "c") { S.custom_on = false; S.cycle_on = false; setSetting("palette_idx", (S.palette_idx + 1) % PALETTE.length); syncUI(true); }
+  else return;
+  e.preventDefault();
+});
+// Hide the mouse cursor when idle
+let idleTimer = 0;
+window.addEventListener("pointermove", () => {
+  document.body.classList.remove("nocursor");
+  clearTimeout(idleTimer);
+  idleTimer = setTimeout(() => {
+    if (panelEl.classList.contains("hidden") && startEl.classList.contains("hidden") && helpEl.classList.contains("hidden"))
+      document.body.classList.add("nocursor");
+  }, 2500);
+});
+
+/* =====================================================================
+   Main loop
+   ===================================================================== */
+const canvas = $("#scope"), hud = $("#hud");
+let renderer = null;
+try { renderer = new Renderer(canvas); }
+catch (e) { showStart(e.message); document.querySelectorAll(".src").forEach(b => b.disabled = true); }
+
+let pixelScale = 1;
+function resizeCanvas() {
+  if (!renderer) return;
+  const dpr = Math.min(window.devicePixelRatio || 1, 3);
+  pixelScale = dpr * S.render_scale;
+  const w = Math.max(2, Math.round(window.innerWidth * pixelScale)), h = Math.max(2, Math.round(window.innerHeight * pixelScale));
+  if (canvas.width !== w || canvas.height !== h) { canvas.width = w; canvas.height = h; }
+  renderer.resize(w, h);
+}
+window.addEventListener("resize", resizeCanvas);
+canvas.addEventListener("webglcontextlost", e => { e.preventDefault(); showStart("The graphics context was lost. Reloading…"); setTimeout(() => location.reload(), 1500); });
+resizeCanvas();
+
+let xw = new Float32Array(0), yw = new Float32Array(0), model = new Float32Array(0);
+let agcGain = S.gain, spinAngle = 0, autoYawPrev = S.auto_yaw, prevT = performance.now(), fps = 0, hudT = 0;
+const MIRRORS = { X: [[1, 1], [-1, 1]], Y: [[1, 1], [1, -1]], XY: [[1, 1], [-1, 1], [1, -1], [-1, -1]] };
+const NO_MIRROR = [[1, 1]];
+
+function frame(now) {
+  requestAnimationFrame(frame);
+  const dt = clamp((now - prevT) / 1000, 0, 0.25); prevT = now;
+  if (dt > 0) fps = fps ? fps * 0.92 + (1 / dt) * 0.08 : 1 / dt;
+  if (!renderer) return;
+
+  // ---- auto rotation (v47/v48 behaviour: turning auto-yaw off recentres yaw) ----
+  if (autoYawPrev && !S.auto_yaw) S.yaw = 0;
+  autoYawPrev = S.auto_yaw;
+  if (S.rot3d) {
+    if (S.auto_yaw) S.yaw = wrapDeg(S.yaw + S.yaw_rate * dt);
+    if (S.auto_pitch) S.pitch = wrapDeg(S.pitch + S.pitch_rate * dt);
+    if (S.auto_roll) S.roll = wrapDeg(S.roll + S.roll_rate * dt);
+  }
+
+  // ---- audio window ----
+  const n = clamp(S.window_samples | 0, 2, RING - 1);
+  if (xw.length !== n) { xw = new Float32Array(n); yw = new Float32Array(n); }
+  const stale = !audio.kind || audio.stale;
+  if (stale) { xw.fill(0); yw.fill(0); } else audio.latest(n, xw, yw);
+  let peak = 0;
+  for (let i = 0; i < n; i++) { const a = Math.abs(xw[i]), b = Math.abs(yw[i]); if (a > peak) peak = a; if (b > peak) peak = b; }
+
+  // ---- gain / AGC ----
+  let gain;
+  if (S.agc_on) {
+    const maxG = Math.max(AGC_MIN_GAIN, S.agc_max);
+    let desired = peak > AGC_SILENCE ? clamp(S.agc_target / peak, AGC_MIN_GAIN, maxG) : agcGain;   // hold in silence
+    desired = Math.min(desired, maxG);
+    const tau = (desired < agcGain ? S.agc_attack_ms : S.agc_release_ms) / 1000;  // attack = gain coming down
+    agcGain += (1 - Math.exp(-dt / Math.max(1e-4, tau))) * (desired - agcGain);
+    gain = agcGain;
+  } else { gain = S.gain; agcGain = gain; }
+  stats.peak = peak; stats.gain = gain; stats.stale = stale;
+
+  // ---- gain + noise gate ----
+  const nf = S.noise_floor, gate = S.gate_on && nf > 0;
+  for (let i = 0; i < n; i++) {
+    let x = xw[i] * gain, y = yw[i] * gain;
+    if (gate) {
+      let t = (Math.sqrt(x * x + y * y) - nf) / Math.max(1e-6, nf * 0.75);
+      t = t < 0 ? 0 : t > 1 ? 1 : t; t = t * t * (3 - 2 * t); x *= t; y *= t;
+    }
+    xw[i] = x; yw[i] = y;
+  }
+
+  // ---- model coordinates (x, y, z per point) ----
+  const ranges = [];
+  if (S.circ_on) {
+    const extra = clamp(S.circ_extra | 0, 0, 11), per = n + 1, total = per * (1 + extra);
+    if (model.length < total * 3) model = new Float32Array(total * 3 * 1.25 | 0);
+    const src = S.circ_src, base = S.circ_base, rad = S.circ_rad;
+    const r = new Float32Array(n), ct = new Float32Array(n), st = new Float32Array(n);
+    for (let i = 0; i < n; i++) {
+      const amp = src === "Left" ? xw[i] : src === "Right" ? yw[i] : 0.5 * (xw[i] + yw[i]);
+      r[i] = clamp(base + rad * amp, 0.05, 2.0);
+      const th = 2 * Math.PI * i / n; ct[i] = Math.cos(th); st[i] = Math.sin(th);
+    }
+    let o = 0;
+    for (let c = 0; c <= extra; c++) {
+      ranges.push([o / 3, per]);
+      // master circle in the XY plane; extras are great circles through the Z axis spread over 180°
+      const phi = c === 0 ? 0 : Math.PI * (c - 1) / extra, cp = Math.cos(phi), sp = Math.sin(phi);
+      for (let k = 0; k <= n; k++) {
+        const i = k === n ? 0 : k, rc = r[i] * ct[i], rs = r[i] * st[i];
+        if (c === 0) { model[o++] = rc; model[o++] = rs; model[o++] = 0; }
+        else { model[o++] = rc * cp; model[o++] = rc * sp; model[o++] = rs; }
+      }
+    }
+  } else {
+    if (model.length < n * 3) model = new Float32Array(n * 3 * 1.25 | 0);
+    const d = S.depth, span = n > 1 ? 2 * d / (n - 1) : 0;
+    for (let i = 0, o = 0; i < n; i++) { model[o++] = xw[i]; model[o++] = yw[i]; model[o++] = -d + span * i; }
+    ranges.push([0, n]);
+  }
+  const used = (ranges.length ? ranges[ranges.length - 1][0] + ranges[ranges.length - 1][1] : 0) * 3;
+
+  // ---- 2D spin ----
+  let spinDelta = 0;
+  if (S.spin_on && S.spin_rate !== 0) {
+    spinAngle = wrapDeg(spinAngle + (S.spin_dir === "CCW" ? 1 : -1) * S.spin_rate * dt);
+    spinDelta = spinAngle;
+  }
+
+  // ---- colour ----
+  let color;
+  if (S.custom_on) color = hexToRgb(S.custom_color);
+  else if (S.cycle_on) color = hsvToRgb(S.cycle_rate * now / 1000);
+  else color = hexToRgb(PALETTE[S.palette_idx % PALETTE.length][0]);
+
+  const persist = clamp(S.trail_persist, 0, 0.999);
+  renderer.draw({
+    data: model.subarray(0, used), ranges,
+    mirrors: S.mirror_on ? (MIRRORS[S.mirror_mode] || NO_MIRROR) : NO_MIRROR,
+    preMirror: S.mirror_pre3d || !S.mirror_on,
+    rot: rotationMatrix(S.roll + spinDelta, S.pitch, S.yaw), use3D: S.rot3d,
+    K: S.persp / Math.max(1, S.depth), spin: spinDelta * Math.PI / 180,
+    sigma: Math.max(0.35, S.thickness * 0.5 * pixelScale), color, speedDim: S.speed_dim, dots: S.draw_mode === "dots",
+    decay: S.trails && persist > 0 ? Math.pow(persist, dt * REF_FPS) : 0,
+    glow: S.glow_on ? S.glow_strength : 0, glowRadius: S.glow_radius, exposure: S.brightness,
+    grid: S.grid, gridW: Math.max(0.5, 0.5 * pixelScale),
+  });
+
+  // ---- HUD / panel ----
+  if (now - hudT > 250) {
+    hudT = now;
+    const parts = [`XY Scope ${VERSION}`, `${Math.round(fps)} fps`, audio.label];
+    if (S.agc_on) parts.push(`AGC ${gain.toFixed(2)}×`);
+    if (audio.kind && stale) parts.push("no audio");
+    hud.innerHTML = esc(parts.join("  ·  ")) + (renderer.floatOK ? "" : ' <span class="err">· 8-bit mode</span>') +
+      '<br><span class="hint">S = settings · H = help</span>';
+  }
+  syncUI();
+}
+requestAnimationFrame(frame);
+</script>
+</body>
+</html>
