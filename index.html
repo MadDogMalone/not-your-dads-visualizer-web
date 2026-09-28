@@ -35,7 +35,7 @@ body.ui-hidden #hud, body.ui-hidden #settingsBtn, body.ui-hidden #panel{display:
 #panel{position:fixed;right:12px;top:56px;bottom:12px;width:min(400px,calc(100vw - 24px));display:flex;flex-direction:column;
   background:var(--panel);border:1px solid var(--border);border-radius:12px;z-index:4;
   backdrop-filter:blur(8px);-webkit-backdrop-filter:blur(8px);box-shadow:0 10px 40px rgba(0,0,0,.5)}
-#tabs{display:grid;grid-template-columns:repeat(6,1fr);gap:2px;padding:10px 10px 6px}
+#tabs{display:grid;grid-template-columns:repeat(5,1fr);gap:3px 2px;padding:10px 10px 6px}
 .tab{position:relative;height:30px;border:0;border-radius:7px;background:transparent;color:var(--dim);cursor:pointer;
   font-size:13px;padding:0 2px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .tab:hover{background:var(--hover)}
@@ -200,7 +200,7 @@ kbd{font:600 12px var(--font);background:var(--btn);border:1px solid var(--borde
    XY Scope (web) — port of xy_scope_soundcard48.py to WebGL2 + Web Audio
    Single self-contained file: no libraries, no server, no install.
    ===================================================================== */
-const VERSION = "web-1.0";
+const VERSION = "web-1.1";
 const RING = 1 << 16;                 // 65536-sample history per channel
 const AGC_MIN_GAIN = 0.2, AGC_SILENCE = 1e-3, SILENCE_TIMEOUT = 0.30, REF_FPS = 120;
 const STORE_KEY = "xyscope.settings.v1";
@@ -233,6 +233,41 @@ const DEFAULTS = {
   dc_on: false, dc_cut: 3.0,
   hpf_on: false, hpf_freq: 200, hpf_q: 0.707, hpf_slope: 24,
   lpf_on: false, lpf_freq: 12000, lpf_q: 0.707, lpf_slope: 24,
+  // Glow pulse (Display tab)
+  glow_mod: "none", glow_mod_amt: 0.6,
+  // Effects: feedback zoom
+  fb_on: false, fb_persist: 0.98, fb_zoom: 0.6, fb_rot: 15, fb_swirl: 0, fb_drift_x: 0, fb_drift_y: 0, fb_hue: 0,
+  fb_mod: "bass", fb_mod_amt: 0.6,
+  // Effects: echo clones
+  echo_on: false, echo_count: 4, echo_delay_ms: 15, echo_scale: 1.18, echo_rot: 8, echo_vortex: 0, echo_fade: 0.7,
+  echo_hue: 25, echo_mod: "none", echo_mod_amt: 0.3,
+  // Effects: kaleidoscope
+  kal_on: false, kal_slices: 6, kal_mirror: true, kal_spin: 10, kal_sweep: 0, kal_keep: 0, kal_mod: "none", kal_mod_amt: 0.5,
+  // Geometry: companion shape
+  shape_on: false, shape_type: "sphere", shape_size: 0.8, shape_detail: 16, shape_torus_r: 0.35, shape_follow: true,
+  shape_spin: 15, shape_tumble: 0, shape_width: 1.0, shape_bright: 0.22, shape_hue: 0,
+  shape_pulse_mod: "bass", shape_pulse_amt: 0.3, shape_glow_mod: "treble", shape_glow_amt: 0.8, shape_trails: false,
+  // Geometry: spectrum halo
+  halo_on: false, halo_bands: 64, halo_radius: 1.15, halo_height: 0.45, halo_smooth: 0.6, halo_dir: "out", halo_sym: true,
+  halo_follow: false, halo_spin: 0, halo_hue_span: 120, halo_hue: 0, halo_width: 1.5, halo_bright: 0.8, halo_trails: false,
+  // Geometry: spectrum terrain
+  ter_on: false, ter_rows: 40, ter_bands: 64, ter_height: 0.6, ter_width: 1.8, ter_length: 3.0, ter_floor: -0.85,
+  ter_tilt: 0, ter_persp: 0.6, ter_speed: 30, ter_center: true, ter_fade: 0.85, ter_hue_shift: 60, ter_width_px: 1.0,
+  ter_bright: 0.6, ter_follow: false, ter_trails: false,
+  // Scene: stars
+  star_on: false, star_count: 400, star_speed: 1.0, star_mod: "level", star_mod_amt: 1.5, star_streak: 0.35,
+  star_size: 1.0, star_bright: 0.5, star_color: "white", star_trails: false,
+  // Scene: sparks
+  spark_on: false, spark_count: 40, spark_speed: 1.6, spark_life: 0.8, spark_spread: 40, spark_gravity: 0,
+  spark_streak: 0.5, spark_size: 1.0, spark_bright: 1.3, spark_hue_spread: 40, spark_trails: true,
+  // Scene: background shader
+  bg_on: false, bg_mode: "nebula", bg_int: 0.35, bg_scale: 1.0, bg_speed: 0.3, bg_hue: 220, bg_hue_drift: 0, bg_sat: 0.7,
+  bg_mod: "bass", bg_mod_amt: 0.6,
+  // Scene: CRT / post
+  crt_scan: 0, crt_scan_px: 3, crt_curve: 0, crt_vig: 0, crt_grain: 0, crt_chroma: 0, crt_flash_mod: "beat", crt_flash_amt: 0,
+  // Reactivity engine
+  re_sens: 1.0, re_range: 30, re_attack_ms: 15, re_release_ms: 200, re_beat_thresh: 1.5, re_beat_decay_ms: 250,
+  re_bass_hz: 150, re_treble_hz: 2500, re_tilt: 3,
 };
 
 const S = loadSettings();
@@ -310,6 +345,9 @@ class AudioEngine {
       this.tap.connect(mute).connect(this.ctx.destination);
       this.input = this.ctx.createGain();                          // every source connects here
       this.input.channelCount = 2; this.input.channelCountMode = "explicit"; this.input.channelInterpretation = "speakers";
+      this.analyser = new AnalyserNode(this.ctx, { fftSize: 4096, smoothingTimeConstant: 0 });   // for reactivity / spectrum
+      this.input.connect(this.analyser);
+      this.freq = new Float32Array(this.analyser.frequencyBinCount);
       this.rebuildFilters(true);
     }
     if (this.ctx.state !== "running") await this.ctx.resume();
@@ -353,9 +391,9 @@ class AudioEngine {
     this.widx = (i + n) % RING; this.lastData = performance.now();
   }
 
-  /** Copy the newest n samples into outL/outR (oldest first). */
-  latest(n, outL, outR) {
-    const i = this.widx;
+  /** Copy n samples ending `offset` samples before the newest one into outL/outR (oldest first). */
+  latest(n, outL, outR, offset = 0) {
+    const i = ((this.widx - offset) % RING + RING) % RING;
     if (i >= n) { outL.set(this.ringL.subarray(i - n, i)); outR.set(this.ringR.subarray(i - n, i)); }
     else { const a = n - i;
       outL.set(this.ringL.subarray(RING - a), 0); outL.set(this.ringL.subarray(0, i), a);
@@ -380,6 +418,7 @@ class AudioEngine {
     }
     if (S.hpf_on) for (let i = 0; i < (S.hpf_slope <= 12 ? 1 : 2); i++) add(new BiquadFilterNode(ctx, { type: "highpass" }), "hp");
     if (S.lpf_on) for (let i = 0; i < (S.lpf_slope <= 12 ? 1 : 2); i++) add(new BiquadFilterNode(ctx, { type: "lowpass" }), "lp");
+    if (this.analyser) this.input.connect(this.analyser);
     let prev = this.input;
     for (const f of this.filterNodes) { prev.connect(f.node); prev = f.node; }
     prev.connect(this.tap);
@@ -479,14 +518,185 @@ class AudioEngine {
 const audio = new AudioEngine();
 
 /* =====================================================================
+   Reactivity engine: level / bass / mid / treble (0..1, auto-levelled) + beat pulse,
+   and log-spaced spectrum bands for the halo and terrain.
+   ===================================================================== */
+class Reactivity {
+  constructor() {
+    this.level = 0; this.bass = 0; this.mid = 0; this.treble = 0; this.beat = 0; this.beatEvent = false;
+    this.peak = { level: -60, bass: -60, mid: -60, treble: -60 };
+    this.bassAvg = 0; this.lastBeat = 0; this.specPeak = -40; this.bandCache = new Map();
+    this.power = null; this.valid = false;
+  }
+  _norm(name, db, dt) {
+    const range = S.re_range;
+    let pk = this.peak[name];
+    pk = Math.max(db, pk - 4 * dt);                         // peak falls 4 dB/s -> auto-level
+    this.peak[name] = Math.max(pk, -90);
+    if (db < -85) return 0;
+    return clamp(((db - (pk - range)) / range) * S.re_sens, 0, 1);
+  }
+  _smooth(cur, target, dt) {
+    const tau = (target > cur ? S.re_attack_ms : S.re_release_ms) / 1000;
+    return cur + (1 - Math.exp(-dt / Math.max(1e-3, tau))) * (target - cur);
+  }
+  update(dt, rms, now, live) {
+    this.beatEvent = false;
+    const an = audio.analyser;
+    if (!an || !live) {
+      this.valid = false;
+      for (const k of ["level", "bass", "mid", "treble"]) this[k] = this._smooth(this[k], 0, dt);
+      this.beat *= Math.exp(-dt / (S.re_beat_decay_ms / 1000));
+      return;
+    }
+    an.getFloatFrequencyData(audio.freq);
+    const f = audio.freq, n = f.length, hz = audio.sampleRate / 2 / n;
+    if (!this.power || this.power.length !== n) this.power = new Float32Array(n);
+    const P = this.power, tilt = S.re_tilt;
+    for (let i = 1; i < n; i++) {
+      const d = isFinite(f[i]) ? f[i] : -160;
+      P[i] = Math.pow(10, (d + tilt * Math.log2(Math.max(20, i * hz) / 1000)) / 10);   // tilt: pink-noise compensation
+    }
+    P[0] = 0;
+    const band = (lo, hi) => { let s = 0; const a = Math.max(1, Math.floor(lo / hz)), b = Math.min(n - 1, Math.ceil(hi / hz));
+      for (let i = a; i <= b; i++) s += P[i]; return 10 * Math.log10(s + 1e-14); };
+    const bHz = S.re_bass_hz, tHz = Math.max(S.re_treble_hz, bHz * 2);
+    const eb = band(25, bHz), em = band(bHz, tHz), et = band(tHz, 16000);
+    const el = 20 * Math.log10(Math.max(rms, 1e-7));
+    this.bass = this._smooth(this.bass, this._norm("bass", eb, dt), dt);
+    this.mid = this._smooth(this.mid, this._norm("mid", em, dt), dt);
+    this.treble = this._smooth(this.treble, this._norm("treble", et, dt), dt);
+    this.level = this._smooth(this.level, this._norm("level", el, dt), dt);
+    // beat: bass energy jumps above its recent average
+    const lin = Math.pow(10, eb / 10);
+    this.bassAvg += (lin - this.bassAvg) * (1 - Math.exp(-dt / 0.35));
+    if (lin > this.bassAvg * S.re_beat_thresh && eb > -75 && now - this.lastBeat > 120) {
+      this.beat = 1; this.beatEvent = true; this.lastBeat = now;
+    } else this.beat *= Math.exp(-dt / (S.re_beat_decay_ms / 1000));
+    // spectrum peak for band normalisation
+    let mx = -140; for (let i = 1; i < n; i++) if (P[i] > 0) { const d = 10 * Math.log10(P[i]); if (d > mx) mx = d; }
+    this.specPeak = Math.max(mx, this.specPeak - 6 * dt, -80);
+    this.valid = true;
+  }
+  /** count log-spaced bands 30 Hz..16 kHz, 0..1 each (no smoothing). */
+  bands(count, out) {
+    if (!out || out.length !== count) out = new Float32Array(count);
+    if (!this.valid) { out.fill(0); return out; }
+    const P = this.power, n = P.length, hz = audio.sampleRate / 2 / n, lo = 30, hi = 16000, range = S.re_range + 12;
+    for (let b = 0; b < count; b++) {
+      const f0 = lo * Math.pow(hi / lo, b / count), f1 = lo * Math.pow(hi / lo, (b + 1) / count);
+      const a = f0 / hz, c = f1 / hz;
+      let s = 0, cnt = 0;
+      if (c - a < 1) {                                        // narrower than a bin: interpolate
+        const x = (a + c) / 2, i = Math.floor(x), t = x - i;
+        s = (P[Math.min(n - 1, i)] || 0) * (1 - t) + (P[Math.min(n - 1, i + 1)] || 0) * t; cnt = 1;
+      } else for (let i = Math.max(1, Math.floor(a)); i < Math.min(n, Math.ceil(c)); i++) { s += P[i]; cnt++; }
+      const db = 10 * Math.log10(s / Math.max(1, cnt) + 1e-14);
+      out[b] = clamp(((db - (this.specPeak - range)) / range) * S.re_sens, 0, 1);
+    }
+    return out;
+  }
+  mod(src) {
+    switch (src) {
+      case "level": return this.level; case "bass": return this.bass; case "mid": return this.mid;
+      case "treble": return this.treble; case "beat": return this.beat; default: return 0;
+    }
+  }
+}
+const react = new Reactivity();
+
+/* ---------- small maths helpers ---------- */
+function hueRotate(c, deg) {          // rotate an RGB colour around the grey axis
+  if (!deg) return c;
+  const a = deg * Math.PI / 180, ca = Math.cos(a), sa = Math.sin(a), k = 0.57735027;
+  const [r, g, b] = c, d = k * (r + g + b) * (1 - ca);
+  const cx = k * (b - g), cy = k * (r - b), cz = k * (g - r);   // cross(k, c)
+  return [Math.max(0, r * ca + cx * sa + k * d), Math.max(0, g * ca + cy * sa + k * d), Math.max(0, b * ca + cz * sa + k * d)];
+}
+const scaleRgb = (c, s) => [c[0] * s, c[1] * s, c[2] * s];
+function mat3Mul(A, B) {              // column-major A*B
+  const o = new Float32Array(9);
+  for (let c = 0; c < 3; c++) for (let r = 0; r < 3; r++)
+    o[c * 3 + r] = A[r] * B[c * 3] + A[3 + r] * B[c * 3 + 1] + A[6 + r] * B[c * 3 + 2];
+  return o;
+}
+/** Same maths as the vertex shader: model point -> scope units (±1 = scope radius). */
+function projectPoint(x, y, z, P) {
+  let qx, qy;
+  if (P.use3D) {
+    const R = P.rot, rx = R[0] * x + R[3] * y + R[6] * z, ry = R[1] * x + R[4] * y + R[7] * z, rz = R[2] * x + R[5] * y + R[8] * z;
+    const d = clamp(1 + P.K * rz, 0.25, 4); qx = rx / d; qy = ry / d;
+  } else { const c = Math.cos(P.spin), s = Math.sin(P.spin); qx = x * c - y * s; qy = x * s + y * c; }
+  return [clamp(qx, -1.5, 1.5), clamp(qy, -1.5, 1.5)];
+}
+
+/* ---------- companion shape geometry (list of segments: 6 floats each) ---------- */
+function buildShape(type, detail, torusR) {
+  const seg = [];
+  const push = (a, b) => seg.push(a[0], a[1], a[2], b[0], b[1], b[2]);
+  const d = Math.max(3, detail | 0);
+  if (type === "sphere") {
+    const rings = Math.max(3, Math.round(d / 2)), segs = d * 2;
+    for (let i = 1; i < rings; i++) {                         // latitude rings
+      const phi = Math.PI * i / rings, y = Math.cos(phi), r = Math.sin(phi);
+      for (let j = 0; j < segs; j++) {
+        const a0 = 2 * Math.PI * j / segs, a1 = 2 * Math.PI * (j + 1) / segs;
+        push([r * Math.cos(a0), y, r * Math.sin(a0)], [r * Math.cos(a1), y, r * Math.sin(a1)]);
+      }
+    }
+    for (let j = 0; j < d; j++) {                             // meridians
+      const a = Math.PI * j / d;
+      for (let i = 0; i < segs; i++) {
+        const p0 = 2 * Math.PI * i / segs, p1 = 2 * Math.PI * (i + 1) / segs;
+        push([Math.sin(p0) * Math.cos(a), Math.cos(p0), Math.sin(p0) * Math.sin(a)],
+             [Math.sin(p1) * Math.cos(a), Math.cos(p1), Math.sin(p1) * Math.sin(a)]);
+      }
+    }
+  } else if (type === "torus") {
+    const R = 1 - torusR * 0.5, r = torusR, U = d * 2, V = Math.max(6, d);
+    const P = (u, v) => [(R + r * Math.cos(v)) * Math.cos(u), r * Math.sin(v), (R + r * Math.cos(v)) * Math.sin(u)];
+    for (let i = 0; i < U; i++) for (let j = 0; j < V; j++) {
+      const u0 = 2 * Math.PI * i / U, u1 = 2 * Math.PI * (i + 1) / U, v0 = 2 * Math.PI * j / V, v1 = 2 * Math.PI * (j + 1) / V;
+      push(P(u0, v0), P(u0, v1)); push(P(u0, v0), P(u1, v0));
+    }
+  } else if (type === "cube") {
+    const k = 0.62, n = Math.max(1, Math.round(d / 8));      // n = grid lines per face edge
+    for (let a = 0; a < 3; a++) for (const s of [-1, 1]) for (let i = 0; i <= n; i++) {
+      const t = -k + 2 * k * i / n;
+      const mk = (u, v) => { const p = [0, 0, 0]; p[a] = s * k; p[(a + 1) % 3] = u; p[(a + 2) % 3] = v; return p; };
+      push(mk(t, -k), mk(t, k)); push(mk(-k, t), mk(k, t));
+    }
+  } else {                                                   // geodesic: subdivided icosahedron
+    const t = (1 + Math.sqrt(5)) / 2;
+    let V = [[-1, t, 0], [1, t, 0], [-1, -t, 0], [1, -t, 0], [0, -1, t], [0, 1, t], [0, -1, -t], [0, 1, -t], [t, 0, -1], [t, 0, 1], [-t, 0, -1], [-t, 0, 1]];
+    let F = [[0, 11, 5], [0, 5, 1], [0, 1, 7], [0, 7, 10], [0, 10, 11], [1, 5, 9], [5, 11, 4], [11, 10, 2], [10, 7, 6], [7, 1, 8],
+             [3, 9, 4], [3, 4, 2], [3, 2, 6], [3, 6, 8], [3, 8, 9], [4, 9, 5], [2, 4, 11], [6, 2, 10], [8, 6, 7], [9, 8, 1]];
+    const nrm = p => { const l = Math.hypot(p[0], p[1], p[2]); return [p[0] / l, p[1] / l, p[2] / l]; };
+    V = V.map(nrm);
+    const levels = clamp(Math.round(d / 10), 0, 3);
+    for (let L = 0; L < levels; L++) {
+      const cache = new Map(), NF = [];
+      const mid = (a, b) => { const key = a < b ? a + "_" + b : b + "_" + a; if (cache.has(key)) return cache.get(key);
+        const m = nrm([(V[a][0] + V[b][0]) / 2, (V[a][1] + V[b][1]) / 2, (V[a][2] + V[b][2]) / 2]); V.push(m); cache.set(key, V.length - 1); return V.length - 1; };
+      for (const [a, b, c] of F) { const ab = mid(a, b), bc = mid(b, c), ca = mid(c, a); NF.push([a, ab, ca], [b, bc, ab], [c, ca, bc], [ab, bc, ca]); }
+      F = NF;
+    }
+    const edges = new Set();
+    for (const [a, b, c] of F) for (const [x, y] of [[a, b], [b, c], [c, a]]) {
+      const key = x < y ? x + "_" + y : y + "_" + x; if (edges.has(key)) continue; edges.add(key); push(V[x], V[y]);
+    }
+  }
+  return new Float32Array(seg);
+}
+
+/* =====================================================================
    GPU renderer (WebGL2)
-   1. beam:    each pair of samples is a quad; the fragment shader integrates a
-               gaussian electron beam along it (smooth joins, true beam width),
-               optionally dimmer where the beam moves fast (like a real CRT).
-               3D rotation / perspective / mirror / spin all happen on the GPU.
-   2. persist: new frame = max(previous * decay, beam)  (phosphor trails, no ghosting)
-   3. bloom:   two blur levels (1/2 and 1/4 res) for the glow
-   4. output:  glow + tone-map + grid
+   1. beam:     waveform (+ echo clones) as a gaussian electron beam on instanced quads
+   2. kaleido:  optional polar fold of the beam image
+   3. layers:   shape / halo / terrain / stars / sparks, into the trail buffer or a clean overlay
+   4. persist:  new = max(feedback(prev) * decay, beam)  (trails + Milkdrop-style feedback zoom)
+   5. bloom:    two blur levels of trails + overlay
+   6. output:   CRT curvature + colour split, tone-map, background shader, grid, scanlines, vignette, grain
    ===================================================================== */
 const GLSL_FS_VERT = `#version 300 es
 out vec2 vUv;
@@ -495,12 +705,16 @@ void main(){ vec2 p = vec2(float((gl_VertexID << 1) & 2), float(gl_VertexID & 2)
 const GLSL_PROJECT = `
 uniform mat3 uRot; uniform float uK; uniform bool u3D; uniform float uSpin;
 uniform vec2 uPre; uniform vec2 uPost; uniform vec2 uScale; uniform vec2 uRes;
+uniform float uModelScale; uniform float uPostScale; uniform float uPostRot; uniform float uClamp;
 vec2 toPixels(vec3 p){
+  p *= uModelScale;
   p.xy *= uPre;
   vec2 q;
   if (u3D) { vec3 r = uRot * p; q = r.xy / clamp(1.0 + uK * r.z, 0.25, 4.0); }
   else { float c = cos(uSpin), s = sin(uSpin); q = vec2(p.x * c - p.y * s, p.x * s + p.y * c); }
-  q = clamp(q * uPost, -1.5, 1.5);
+  q = clamp(q * uPost, -uClamp, uClamp);
+  float c2 = cos(uPostRot), s2 = sin(uPostRot);
+  q = vec2(q.x * c2 - q.y * s2, q.x * s2 + q.y * c2) * uPostScale;
   return (q * uScale * 0.5 + 0.5) * uRes;
 }`;
 
@@ -509,9 +723,10 @@ precision highp float;
 layout(location=0) in vec3 aA;
 layout(location=1) in vec3 aB;
 layout(location=2) in vec2 aCorner;
+layout(location=3) in vec3 aCol;
 uniform float uRadius;
 ${GLSL_PROJECT}
-out vec2 vUV; out float vLen;
+out vec2 vUV; out float vLen; out vec3 vCol;
 void main(){
   vec2 a = toPixels(aA), b = toPixels(aB);
   vec2 d = b - a; float L = length(d);
@@ -519,13 +734,13 @@ void main(){
   vec2 nrm = vec2(-dir.y, dir.x);
   float along = aCorner.x < 0.0 ? -uRadius : L + uRadius;
   vec2 pos = a + dir * along + nrm * aCorner.y * uRadius;
-  vUV = vec2(along, aCorner.y * uRadius); vLen = L;
+  vUV = vec2(along, aCorner.y * uRadius); vLen = L; vCol = aCol;
   gl_Position = vec4(pos / uRes * 2.0 - 1.0, 0.0, 1.0);
 }`;
 
 const GLSL_BEAM_FRAG = `#version 300 es
 precision highp float;
-in vec2 vUV; in float vLen;
+in vec2 vUV; in float vLen; in vec3 vCol;
 uniform float uSigma; uniform vec3 uColor; uniform float uSpeedDim;
 out vec4 o;
 float erf_(float x){
@@ -539,7 +754,7 @@ void main(){
   float along = 0.5 * (erf_((vLen - vUV.x) * k) - erf_(-vUV.x * k));   // beam integrated over this segment
   float across = exp(-0.5 * vUV.y * vUV.y / (uSigma * uSigma));
   float speed = pow(uSigma / max(vLen, 0.25 * uSigma), uSpeedDim);     // fast beam = dimmer (optional)
-  o = vec4(uColor * (along * across * speed), 1.0);
+  o = vec4(uColor * vCol * (along * across * speed), 1.0);
 }`;
 
 const GLSL_DOT_VERT = `#version 300 es
@@ -555,17 +770,54 @@ uniform float uSigma; uniform float uRadius; uniform vec3 uColor;
 out vec4 o;
 void main(){ vec2 d = (gl_PointCoord - 0.5) * 2.0 * uRadius; o = vec4(uColor * exp(-0.5 * dot(d, d) / (uSigma * uSigma)), 1.0); }`;
 
+const GLSL_KALEIDO = `#version 300 es
+precision highp float;
+in vec2 vUv; uniform sampler2D uSrc; uniform vec2 uRes;
+uniform float uN, uRotOut, uRotSrc, uKeep; uniform bool uMirror;
+out vec4 o;
+void main(){
+  vec2 p = vUv * uRes - 0.5 * uRes;
+  float r = length(p);
+  float sector = 6.2831853 / uN;
+  float a = atan(p.y, p.x) - uRotOut;
+  a = mod(a, sector);
+  if (uMirror && a > sector * 0.5) a = sector - a;
+  a += uRotSrc;
+  vec2 q = vec2(cos(a), sin(a)) * r + 0.5 * uRes;
+  vec3 k = texture(uSrc, q / uRes).rgb;
+  o = vec4(max(k, texture(uSrc, vUv).rgb * uKeep), 1.0);
+}`;
+
 const GLSL_PERSIST = `#version 300 es
 precision highp float;
-in vec2 vUv; uniform sampler2D uPrev, uBeam; uniform float uDecay, uFloor; out vec4 o;
-void main(){ vec3 p = max(texture(uPrev, vUv).rgb * uDecay - uFloor, 0.0); o = vec4(max(p, texture(uBeam, vUv).rgb), 1.0); }`;
+in vec2 vUv; uniform sampler2D uPrev, uBeam; uniform float uDecay, uFloor; uniform vec2 uRes;
+uniform bool uFB; uniform float uZoom, uFbRot, uSwirl, uHue; uniform vec2 uDrift;
+out vec4 o;
+vec3 hueRot(vec3 c, float a){ const vec3 k = vec3(0.57735027); float ca = cos(a);
+  return c * ca + cross(k, c) * sin(a) + k * dot(k, c) * (1.0 - ca); }
+void main(){
+  vec2 uv = vUv;
+  if (uFB) {                                   // Milkdrop-style feedback: warp the previous frame
+    vec2 p = (vUv - 0.5) * uRes;
+    float R = 0.5 * min(uRes.x, uRes.y);
+    float ang = -uFbRot - uSwirl * length(p) / R;
+    float c = cos(ang), s = sin(ang);
+    p = vec2(p.x * c - p.y * s, p.x * s + p.y * c) / uZoom - uDrift;
+    uv = p / uRes + 0.5;
+  }
+  vec3 prev = (uv.x < 0.0 || uv.x > 1.0 || uv.y < 0.0 || uv.y > 1.0) ? vec3(0.0) : texture(uPrev, uv).rgb;
+  if (uFB && uHue != 0.0) prev = max(hueRot(prev, uHue), 0.0);
+  prev = max(prev * uDecay - uFloor, 0.0);
+  o = vec4(max(prev, texture(uBeam, vUv).rgb), 1.0);
+}`;
 
 const GLSL_DOWN = `#version 300 es
 precision highp float;
-in vec2 vUv; uniform sampler2D uSrc; uniform vec2 uTexel; out vec4 o;
+in vec2 vUv; uniform sampler2D uSrc, uSrc2; uniform vec2 uTexel; uniform float uW2; out vec4 o;
+vec3 s(vec2 uv){ return texture(uSrc, uv).rgb + uW2 * texture(uSrc2, uv).rgb; }
 void main(){
-  vec3 c = texture(uSrc, vUv + uTexel * vec2(-1.0, -1.0)).rgb + texture(uSrc, vUv + uTexel * vec2(1.0, -1.0)).rgb
-         + texture(uSrc, vUv + uTexel * vec2(-1.0, 1.0)).rgb + texture(uSrc, vUv + uTexel * vec2(1.0, 1.0)).rgb;
+  vec3 c = s(vUv + uTexel * vec2(-1.0, -1.0)) + s(vUv + uTexel * vec2(1.0, -1.0))
+         + s(vUv + uTexel * vec2(-1.0, 1.0)) + s(vUv + uTexel * vec2(1.0, 1.0));
   o = vec4(c * 0.25, 1.0);
 }`;
 
@@ -584,14 +836,67 @@ void main(){
 const GLSL_COMPOSITE = `#version 300 es
 precision highp float;
 in vec2 vUv;
-uniform sampler2D uAcc, uB1, uB2; uniform float uGlow, uExposure, uGridW; uniform bool uGrid; uniform vec2 uRes;
+uniform sampler2D uAcc, uOver, uB1, uB2;
+uniform float uGlow, uExposure, uGridW; uniform bool uGrid; uniform vec2 uRes;
+uniform float uCurve, uChroma, uScan, uScanPx, uVig, uGrain, uTime;
+uniform bool uBg; uniform float uBgMode, uBgInt, uBgScale, uBgTime, uBgHue, uBgSat, uBgPulse;
 out vec4 o;
+
+vec3 scene(vec2 uv){
+  vec3 c = texture(uAcc, uv).rgb + texture(uOver, uv).rgb;
+  if (uGlow > 0.0) c += uGlow * (texture(uB1, uv).rgb * 0.7 + texture(uB2, uv).rgb * 1.1);
+  return c;
+}
+float hash(vec2 p){ p = fract(p * vec2(123.34, 456.21)); p += dot(p, p + 45.32); return fract(p.x * p.y); }
+float vnoise(vec2 p){ vec2 i = floor(p), f = fract(p); f = f * f * (3.0 - 2.0 * f);
+  return mix(mix(hash(i), hash(i + vec2(1, 0)), f.x), mix(hash(i + vec2(0, 1)), hash(i + vec2(1, 1)), f.x), f.y); }
+float fbm(vec2 p){ float v = 0.0, a = 0.5; for (int i = 0; i < 5; i++) { v += a * vnoise(p); p = p * 2.03 + 17.1; a *= 0.5; } return v; }
+vec3 hsv(float h, float s, float v){ vec3 k = clamp(abs(mod(h * 6.0 + vec3(0, 4, 2), 6.0) - 3.0) - 1.0, 0.0, 1.0); return v * mix(vec3(1.0), k, s); }
+
+vec3 background(vec2 uv){
+  vec2 p = (uv - 0.5) * uRes / min(uRes.x, uRes.y) * uBgScale;   // aspect-correct, centred
+  float t = uBgTime, v = 0.0, h = uBgHue;
+  if (uBgMode < 0.5) {                          // nebula: domain-warped noise
+    vec2 q = vec2(fbm(p * 2.0 + t * 0.15), fbm(p * 2.0 + 5.2 - t * 0.12));
+    float n = fbm(p * 2.0 + 3.0 * q + vec2(t * 0.05, 0.0));
+    v = pow(n, 2.2) * 2.2; h += 0.12 * q.x;
+  } else if (uBgMode < 1.5) {                   // plasma
+    float s = sin(p.x * 6.0 + t) + sin(p.y * 7.0 - t * 1.3) + sin((p.x + p.y) * 5.0 + t * 0.7) + sin(length(p) * 9.0 - t * 2.0);
+    v = 0.5 + 0.5 * sin(s * 1.3); v = v * v; h += s * 0.06;
+  } else if (uBgMode < 2.5) {                   // hex grid with ripples from the centre
+    vec2 g = p * 6.0; const vec2 r = vec2(1.0, 1.7320508);
+    vec2 a = mod(g, r) - r * 0.5, b = mod(g - r * 0.5, r) - r * 0.5;
+    vec2 gv = dot(a, a) < dot(b, b) ? a : b; vec2 id = g - gv;
+    vec2 ag = abs(gv); float hd = max(dot(ag, normalize(vec2(1.0, 1.7320508))), ag.x);   // hexagon distance
+    float edge = smoothstep(0.40, 0.5, hd);
+    float wave = 0.5 + 0.5 * sin(length(id) * 0.9 - t * 3.0);
+    v = edge * (0.25 + 0.75 * wave) + 0.12 * wave * wave; h += length(id) * 0.01;
+  } else {                                      // polar rings + spokes
+    float r = length(p), ang = atan(p.y, p.x);
+    float rings = pow(0.5 + 0.5 * sin(r * 28.0 - t * 4.0), 8.0);
+    float spokes = pow(0.5 + 0.5 * cos(ang * 12.0 + t * 0.5), 20.0) * smoothstep(0.05, 0.6, r);
+    v = (rings + 0.6 * spokes) * exp(-r * 0.9); h += r * 0.15;
+  }
+  return hsv(fract(h), uBgSat, clamp(v, 0.0, 1.5)) * uBgInt * uBgPulse;
+}
+
 void main(){
-  vec3 c = texture(uAcc, vUv).rgb;
-  if (uGlow > 0.0) c += uGlow * (texture(uB1, vUv).rgb * 0.7 + texture(uB2, vUv).rgb * 1.1);
+  vec2 uv = vUv;
+  if (uCurve > 0.0) {                           // CRT barrel curvature
+    vec2 c = uv * 2.0 - 1.0;
+    c *= 1.0 + uCurve * dot(c, c) * 0.35;
+    uv = c * 0.5 + 0.5;
+    if (uv.x < 0.0 || uv.x > 1.0 || uv.y < 0.0 || uv.y > 1.0) { o = vec4(0.0, 0.0, 0.0, 1.0); return; }
+  }
+  vec3 c;
+  if (uChroma > 0.0) {                          // colour split away from the centre
+    vec2 d = (uv - 0.5) * uChroma / uRes * 2.0;
+    c = vec3(scene(uv + d).r, scene(uv).g, scene(uv - d).b);
+  } else c = scene(uv);
   c = 1.0 - exp(-c * uExposure);
+  if (uBg) { vec3 b = clamp(background(uv), 0.0, 1.0); c = 1.0 - (1.0 - c) * (1.0 - b); }   // screen blend
   if (uGrid) {
-    vec2 px = vUv * uRes, ctr = uRes * 0.5;
+    vec2 px = uv * uRes, ctr = uRes * 0.5;
     float inset = 0.06 * min(uRes.x, uRes.y);
     float g = 0.0;
     if (abs(px.x - ctr.x) < uGridW || abs(px.y - ctr.y) < uGridW) g = 0.157;
@@ -599,7 +904,10 @@ void main(){
     if (min(e.x, e.y) > -uGridW && (abs(e.x) < uGridW || abs(e.y) < uGridW)) g = 0.235;
     c = max(c, vec3(g));
   }
-  o = vec4(c, 1.0);
+  if (uScan > 0.0) c *= 1.0 - uScan * (0.5 + 0.5 * cos(6.2831853 * vUv.y * uRes.y / uScanPx));
+  if (uVig > 0.0) { vec2 v = vUv - 0.5; c *= 1.0 - uVig * smoothstep(0.2, 0.75, length(v * vec2(uRes.x / uRes.y, 1.0)) * 0.9); }
+  if (uGrain > 0.0) c += (hash(vUv * uRes + fract(uTime * 7.13) * 100.0) - 0.5) * uGrain;
+  o = vec4(clamp(c, 0.0, 1.0), 1.0);
 }`;
 
 class Renderer {
@@ -612,6 +920,7 @@ class Renderer {
     this.floatOK = !!gl.getExtension("EXT_color_buffer_float");
     this.progBeam = this._prog(GLSL_BEAM_VERT, GLSL_BEAM_FRAG);
     this.progDot = this._prog(GLSL_DOT_VERT, GLSL_DOT_FRAG);
+    this.progKal = this._prog(GLSL_FS_VERT, GLSL_KALEIDO);
     this.progPersist = this._prog(GLSL_FS_VERT, GLSL_PERSIST);
     this.progDown = this._prog(GLSL_FS_VERT, GLSL_DOWN);
     this.progBlur = this._prog(GLSL_FS_VERT, GLSL_BLUR);
@@ -619,10 +928,12 @@ class Renderer {
     this.u = new Map();
 
     this.pointBuf = gl.createBuffer();
+    this.pairBuf = gl.createBuffer();
     this.cornerBuf = gl.createBuffer();
     gl.bindBuffer(gl.ARRAY_BUFFER, this.cornerBuf);
     gl.bufferData(gl.ARRAY_BUFFER, new Float32Array([-1, -1, 1, -1, -1, 1, 1, 1]), gl.STATIC_DRAW);
 
+    // polyline VAO: instance i = points i..i+1
     this.vaoBeam = gl.createVertexArray();
     gl.bindVertexArray(this.vaoBeam);
     gl.bindBuffer(gl.ARRAY_BUFFER, this.cornerBuf);
@@ -630,6 +941,15 @@ class Renderer {
     gl.bindBuffer(gl.ARRAY_BUFFER, this.pointBuf);
     gl.enableVertexAttribArray(0); gl.vertexAttribDivisor(0, 1);
     gl.enableVertexAttribArray(1); gl.vertexAttribDivisor(1, 1);
+    // segment-pair VAO: instance = [ax ay az bx by bz r g b]
+    this.vaoPair = gl.createVertexArray();
+    gl.bindVertexArray(this.vaoPair);
+    gl.bindBuffer(gl.ARRAY_BUFFER, this.cornerBuf);
+    gl.enableVertexAttribArray(2); gl.vertexAttribPointer(2, 2, gl.FLOAT, false, 0, 0);
+    gl.bindBuffer(gl.ARRAY_BUFFER, this.pairBuf);
+    for (const [loc, off] of [[0, 0], [1, 12], [3, 24]]) {
+      gl.enableVertexAttribArray(loc); gl.vertexAttribDivisor(loc, 1); gl.vertexAttribPointer(loc, 3, gl.FLOAT, false, 36, off);
+    }
     this.vaoDot = gl.createVertexArray();
     gl.bindVertexArray(this.vaoDot);
     gl.bindBuffer(gl.ARRAY_BUFFER, this.pointBuf);
@@ -686,7 +1006,8 @@ class Renderer {
     this.w = w; this.h = h;
     const w2 = Math.max(1, w >> 1), h2 = Math.max(1, h >> 1), w4 = Math.max(1, w >> 2), h4 = Math.max(1, h >> 2);
     this.targets = {
-      beam: this._target(w, h), accA: this._target(w, h), accB: this._target(w, h),
+      beam: this._target(w, h), kal: this._target(w, h), over: this._target(w, h),
+      accA: this._target(w, h), accB: this._target(w, h),
       h1: this._target(w2, h2), h2: this._target(w2, h2), q1: this._target(w4, h4), q2: this._target(w4, h4),
     };
   }
@@ -710,69 +1031,124 @@ class Renderer {
     gl.bindVertexArray(this.vaoEmpty);
     gl.drawArrays(gl.TRIANGLES, 0, 3);
   }
+  _clear(t) { const gl = this.gl; gl.bindFramebuffer(gl.FRAMEBUFFER, t.fb); gl.viewport(0, 0, t.w, t.h); gl.clearColor(0, 0, 0, 1); gl.clear(gl.COLOR_BUFFER_BIT); }
 
-  /** p: { data, ranges:[[startPoint,count]], mirrors:[[sx,sy]], preMirror, rot, use3D, K, spin,
-          sigma, color, speedDim, dots, decay, floor, glow, glowRadius, exposure, grid, gridW } */
+  /** Set the projection + beam uniforms shared by the beam and dot programs. */
+  _setProj(prog, pr, sigma, radius) {
+    const gl = this.gl, W = this.w, H = this.h, s = Math.min(W, H) * 0.88 / 2;
+    gl.uniformMatrix3fv(this._loc(prog, "uRot"), false, pr.rot);
+    gl.uniform1f(this._loc(prog, "uK"), pr.K);
+    gl.uniform1i(this._loc(prog, "u3D"), pr.use3D ? 1 : 0);
+    gl.uniform1f(this._loc(prog, "uSpin"), pr.spin || 0);
+    gl.uniform2f(this._loc(prog, "uScale"), s / (W / 2), s / (H / 2));
+    gl.uniform2f(this._loc(prog, "uRes"), W, H);
+    gl.uniform1f(this._loc(prog, "uModelScale"), pr.modelScale == null ? 1 : pr.modelScale);
+    gl.uniform1f(this._loc(prog, "uClamp"), pr.clamp == null ? 1.5 : pr.clamp);
+    gl.uniform1f(this._loc(prog, "uPostScale"), 1); gl.uniform1f(this._loc(prog, "uPostRot"), 0);
+    gl.uniform2f(this._loc(prog, "uPre"), 1, 1); gl.uniform2f(this._loc(prog, "uPost"), 1, 1);
+    gl.uniform1f(this._loc(prog, "uRadius"), radius);
+    gl.uniform1f(this._loc(prog, "uSigma"), sigma);
+  }
+
+  /**
+   * p.poly: { data, draws:[{start,count,color,postScale,postRot}], mirrors, preMirror, proj, sigma, speedDim, dots }
+   * p.pairs: { data (9 floats/segment), draws:[{start,count,proj,sigma,intensity,trails}] }
+   * plus kaleido / feedback / bloom / composite settings.
+   */
   draw(p) {
     const gl = this.gl, T = this.targets, W = this.w, H = this.h;
-    // ---- 1. beam ----
-    gl.bindFramebuffer(gl.FRAMEBUFFER, T.beam.fb);
-    gl.viewport(0, 0, W, H);
-    gl.clearColor(0, 0, 0, 1); gl.clear(gl.COLOR_BUFFER_BIT);
-    if (p.ranges.length) {
-      gl.enable(gl.BLEND); gl.blendFunc(gl.ONE, gl.ONE); gl.blendEquation(gl.FUNC_ADD);
+    gl.blendFunc(gl.ONE, gl.ONE); gl.blendEquation(gl.FUNC_ADD);
+
+    // ---- 1. waveform (+ clones) ----
+    this._clear(T.beam);
+    const P = p.poly;
+    if (P.draws.length) {
+      gl.enable(gl.BLEND);
       gl.bindBuffer(gl.ARRAY_BUFFER, this.pointBuf);
-      gl.bufferData(gl.ARRAY_BUFFER, p.data, gl.DYNAMIC_DRAW);
-      const prog = p.dots ? this.progDot : this.progBeam;
+      gl.bufferData(gl.ARRAY_BUFFER, P.data, gl.DYNAMIC_DRAW);
+      const prog = P.dots ? this.progDot : this.progBeam;
       gl.useProgram(prog);
-      const s = Math.min(W, H) * 0.88 / 2;
-      const radius = p.dots ? Math.max(1.5, p.sigma * 3) : p.sigma * 3.5 + 1;
-      gl.uniformMatrix3fv(this._loc(prog, "uRot"), false, p.rot);
-      gl.uniform1f(this._loc(prog, "uK"), p.K);
-      gl.uniform1i(this._loc(prog, "u3D"), p.use3D ? 1 : 0);
-      gl.uniform1f(this._loc(prog, "uSpin"), p.spin);
-      gl.uniform2f(this._loc(prog, "uScale"), s / (W / 2), s / (H / 2));
-      gl.uniform2f(this._loc(prog, "uRes"), W, H);
-      gl.uniform1f(this._loc(prog, "uRadius"), radius);
-      gl.uniform1f(this._loc(prog, "uSigma"), p.sigma);
-      gl.uniform3fv(this._loc(prog, "uColor"), p.color);
-      if (!p.dots) gl.uniform1f(this._loc(prog, "uSpeedDim"), p.speedDim);
-      const uPre = this._loc(prog, "uPre"), uPost = this._loc(prog, "uPost");
-      gl.bindVertexArray(p.dots ? this.vaoDot : this.vaoBeam);
-      for (const [start, count] of p.ranges) {
-        if (count < 2) continue;
-        if (p.dots) gl.vertexAttribPointer(0, 3, gl.FLOAT, false, 12, start * 12);
-        else {
-          gl.vertexAttribPointer(0, 3, gl.FLOAT, false, 12, start * 12);
-          gl.vertexAttribPointer(1, 3, gl.FLOAT, false, 12, (start + 1) * 12);
-        }
-        for (const m of p.mirrors) {
-          gl.uniform2f(uPre, p.preMirror ? m[0] : 1, p.preMirror ? m[1] : 1);
-          gl.uniform2f(uPost, p.preMirror ? 1 : m[0], p.preMirror ? 1 : m[1]);
-          if (p.dots) gl.drawArrays(gl.POINTS, 0, count);
-          else gl.drawArraysInstanced(gl.TRIANGLE_STRIP, 0, 4, count - 1);
+      const radius = P.dots ? Math.max(1.5, P.sigma * 3) : P.sigma * 3.5 + 1;
+      this._setProj(prog, P.proj, P.sigma, radius);
+      if (!P.dots) { gl.uniform1f(this._loc(prog, "uSpeedDim"), P.speedDim); gl.vertexAttrib3f(3, 1, 1, 1); }
+      const uPre = this._loc(prog, "uPre"), uPost = this._loc(prog, "uPost"), uCol = this._loc(prog, "uColor");
+      const uPS = this._loc(prog, "uPostScale"), uPR = this._loc(prog, "uPostRot");
+      gl.bindVertexArray(P.dots ? this.vaoDot : this.vaoBeam);
+      for (const d of P.draws) {
+        if (d.count < 2) continue;
+        gl.vertexAttribPointer(0, 3, gl.FLOAT, false, 12, d.start * 12);
+        if (!P.dots) gl.vertexAttribPointer(1, 3, gl.FLOAT, false, 12, (d.start + 1) * 12);
+        gl.uniform3fv(uCol, d.color); gl.uniform1f(uPS, d.postScale); gl.uniform1f(uPR, d.postRot);
+        for (const m of P.mirrors) {
+          gl.uniform2f(uPre, P.preMirror ? m[0] : 1, P.preMirror ? m[1] : 1);
+          gl.uniform2f(uPost, P.preMirror ? 1 : m[0], P.preMirror ? 1 : m[1]);
+          if (P.dots) gl.drawArrays(gl.POINTS, 0, d.count);
+          else gl.drawArraysInstanced(gl.TRIANGLE_STRIP, 0, 4, d.count - 1);
         }
       }
       gl.disable(gl.BLEND);
     }
-    // ---- 2. persistence ----
-    this._pass(this.progPersist, T.accB, { uPrev: T.accA, uBeam: T.beam },
-      { uDecay: p.decay, uFloor: this.floatOK ? 0.0004 : 1.5 / 255 });
+
+    // ---- 2. kaleidoscope ----
+    let trailSrc = T.beam;
+    if (p.kal) {
+      gl.disable(gl.BLEND);
+      this._pass(this.progKal, T.kal, { uSrc: T.beam },
+        { uRes: [W, H], uN: p.kal.n, uRotOut: p.kal.rotOut, uRotSrc: p.kal.rotSrc, uKeep: p.kal.keep, uMirror: p.kal.mirror });
+      trailSrc = T.kal;
+    }
+
+    // ---- 3. extra layers ----
+    this._clear(T.over);
+    const Q = p.pairs;
+    if (Q.draws.length) {
+      gl.bindBuffer(gl.ARRAY_BUFFER, this.pairBuf);
+      gl.bufferData(gl.ARRAY_BUFFER, Q.data, gl.DYNAMIC_DRAW);
+      const prog = this.progBeam;
+      gl.useProgram(prog);
+      gl.bindVertexArray(this.vaoPair);
+      gl.enable(gl.BLEND);
+      for (const d of Q.draws) {
+        if (!d.count) continue;
+        const t = d.trails ? trailSrc : T.over;
+        gl.bindFramebuffer(gl.FRAMEBUFFER, t.fb); gl.viewport(0, 0, W, H);
+        this._setProj(prog, d.proj, d.sigma, d.sigma * 3.5 + 1);
+        gl.uniform1f(this._loc(prog, "uSpeedDim"), 0);
+        gl.uniform3f(this._loc(prog, "uColor"), d.intensity, d.intensity, d.intensity);
+        for (const [loc, off] of [[0, 0], [1, 12], [3, 24]]) gl.vertexAttribPointer(loc, 3, gl.FLOAT, false, 36, d.start * 36 + off);
+        gl.drawArraysInstanced(gl.TRIANGLE_STRIP, 0, 4, d.count);
+      }
+      gl.disable(gl.BLEND);
+      gl.bindVertexArray(null);
+    }
+
+    // ---- 4. persistence + feedback ----
+    const fb = p.feedback;
+    this._pass(this.progPersist, T.accB, { uPrev: T.accA, uBeam: trailSrc }, {
+      uDecay: p.decay, uFloor: this.floatOK ? 0.0004 : 1.5 / 255, uRes: [W, H], uFB: !!fb,
+      uZoom: fb ? fb.zoom : 1, uFbRot: fb ? fb.rot : 0, uSwirl: fb ? fb.swirl : 0, uHue: fb ? fb.hue : 0,
+      uDrift: fb ? fb.drift : [0, 0] });
     [T.accA, T.accB] = [T.accB, T.accA];
     const acc = T.accA;
-    // ---- 3. bloom ----
+
+    // ---- 5. bloom ----
     if (p.glow > 0) {
       const r = p.glowRadius;
-      this._pass(this.progDown, T.h1, { uSrc: acc }, { uTexel: [1 / W, 1 / H] });
+      this._pass(this.progDown, T.h1, { uSrc: acc, uSrc2: T.over }, { uTexel: [1 / W, 1 / H], uW2: 1 });
       this._pass(this.progBlur, T.h2, { uSrc: T.h1 }, { uDir: [r / T.h1.w, 0] });
       this._pass(this.progBlur, T.h1, { uSrc: T.h2 }, { uDir: [0, r / T.h1.h] });
-      this._pass(this.progDown, T.q1, { uSrc: T.h1 }, { uTexel: [1 / T.h1.w, 1 / T.h1.h] });
+      this._pass(this.progDown, T.q1, { uSrc: T.h1, uSrc2: T.h1 }, { uTexel: [1 / T.h1.w, 1 / T.h1.h], uW2: 0 });
       this._pass(this.progBlur, T.q2, { uSrc: T.q1 }, { uDir: [r / T.q1.w, 0] });
       this._pass(this.progBlur, T.q1, { uSrc: T.q2 }, { uDir: [0, r / T.q1.h] });
     }
-    // ---- 4. output ----
-    this._pass(this.progComp, null, { uAcc: acc, uB1: T.h1, uB2: T.q1 },
-      { uGlow: p.glow, uExposure: p.exposure, uGrid: p.grid, uGridW: p.gridW, uRes: [W, H] });
+
+    // ---- 6. output ----
+    const c = p.comp;
+    this._pass(this.progComp, null, { uAcc: acc, uOver: T.over, uB1: T.h1, uB2: T.q1 }, {
+      uGlow: p.glow, uExposure: p.exposure, uGrid: p.grid, uGridW: p.gridW, uRes: [W, H],
+      uCurve: c.curve, uChroma: c.chroma, uScan: c.scan, uScanPx: c.scanPx, uVig: c.vig, uGrain: c.grain, uTime: c.time,
+      uBg: c.bg, uBgMode: c.bgMode, uBgInt: c.bgInt, uBgScale: c.bgScale, uBgTime: c.bgTime, uBgHue: c.bgHue,
+      uBgSat: c.bgSat, uBgPulse: c.bgPulse });
   }
 }
 
@@ -845,7 +1221,7 @@ function Toggle(key, label, o = {}) {
 function Slider(key, label, lo, hi, o = {}) {
   const r = makeRow("slider", [key], o.en);
   const step = o.step || 0, log = !!o.log, sig = o.sig || 0;
-  const isInt = Number.isInteger(DEFAULTS[key]) && (step >= 1 || sig);
+  const isInt = o.int != null ? o.int : (Number.isInteger(DEFAULTS[key]) && (step >= 1 || (sig && hi >= 100)));
   const fmt = o.fmt || (v => v.toFixed(2));
   const quant = v => {
     v = clamp(+v, lo, hi);
@@ -896,6 +1272,28 @@ function Choice(key, label, options, o = {}) {
   r.sync = () => { r.syncBase(); const v = S[key]; if (r.last.v === v) return; r.last.v = v; btns.forEach(([bv, b]) => b.classList.toggle("sel", approxEq(bv, v))); };
   return r;
 }
+function Select(key, label, options, o = {}) {
+  const r = makeRow("select-row", [key], o.en);
+  const line = el("div", "line"), sel = el("select");
+  sel.style.width = "auto"; sel.style.minWidth = "132px"; sel.setAttribute("aria-label", label);
+  sel.innerHTML = options.map(([v, t]) => `<option value="${esc(v)}">${esc(t)}</option>`).join("");
+  line.append(el("span", "lab", esc(label)), sel);
+  r.el.prepend(line);
+  sel.addEventListener("change", () => { const opt = options.find(([v]) => String(v) === sel.value); if (opt) setSetting(key, opt[0]); });
+  r.sync = () => { r.syncBase(); if (r.last.v !== S[key]) { sel.value = String(S[key]); r.last.v = S[key]; } };
+  return r;
+}
+const MOD_SOURCES = [["none", "Off"], ["level", "Loudness"], ["bass", "Bass"], ["mid", "Mids"], ["treble", "Treble"], ["beat", "Beat pulse"]];
+/** "React to [source]" + "Amount" pair, used by every effect. */
+function Mod(srcKey, amtKey, label, lo, hi, o = {}) {
+  const en = o.en;
+  return [Select(srcKey, label, MOD_SOURCES, { en }),
+          Slider(amtKey, "Amount", lo, hi, { step: o.step || 0.05, fmt: o.fmt, en: s => (!en || en(s)) && s[srcKey] !== "none" })];
+}
+function LiveMeter(label, fn, color) {
+  return Meter(label, () => { const v = fn(); return [v, (v * 100).toFixed(0) + "%", color || "var(--accent)"]; });
+}
+
 function Swatches(key, o = {}) {
   const r = makeRow("swatch-row", [key], o.en);
   const wrap = el("div", "swatches");
@@ -988,6 +1386,7 @@ const TABS = [
     Toggle("glow_on", "GPU glow (bloom)"),
     Slider("glow_strength", "Glow strength", 0, 3, { step: 0.05, en: enK("glow_on") }),
     Slider("glow_radius", "Glow radius", 0.25, 4, { step: 0.05, en: enK("glow_on") }),
+    ...Mod("glow_mod", "glow_mod_amt", "Glow pulses with", 0, 3, { en: enK("glow_on") }),
     Header("Trails"),
     Toggle("trails", "Phosphor trails"),
     Slider("trail_persist", "Persistence", 0, 0.99, { step: 0.01, en: enK("trails") }),
@@ -1083,6 +1482,152 @@ const TABS = [
     Slider("lpf_freq", "Frequency", 10, 20000, { log: true, sig: 3, fmt: fmtHz, en: enK("lpf_on") }),
     Slider("lpf_q", "Q", 0.3, 2, { step: 0.01, en: enK("lpf_on") }),
     Choice("lpf_slope", "Slope", [[12, "12 dB/oct"], [24, "24 dB/oct"]], { en: enK("lpf_on") }),
+  ]],
+  ["Effects", [
+    Header("Feedback zoom"),
+    Toggle("fb_on", "Feedback zoom (Milkdrop style)"),
+    Slider("fb_persist", "Feedback persistence", 0.5, 0.995, { step: 0.005, fmt: v => v.toFixed(3), en: enK("fb_on") }),
+    Slider("fb_zoom", "Zoom", -1.5, 1.5, { step: 0.01, fmt: v => `${v >= 0 ? "+" : ""}${Math.round((Math.exp(v) - 1) * 100)}%/s`, en: enK("fb_on") }),
+    Slider("fb_rot", "Rotation", -180, 180, { step: 1, fmt: fmtRate, en: enK("fb_on") }),
+    Slider("fb_swirl", "Swirl (edge vs centre)", -180, 180, { step: 1, fmt: fmtRate, en: enK("fb_on") }),
+    Slider("fb_drift_x", "Drift X", -0.5, 0.5, { step: 0.01, en: enK("fb_on") }),
+    Slider("fb_drift_y", "Drift Y", -0.5, 0.5, { step: 0.01, en: enK("fb_on") }),
+    Slider("fb_hue", "Colour shift", -180, 180, { step: 1, fmt: fmtRate, en: enK("fb_on") }),
+    ...Mod("fb_mod", "fb_mod_amt", "Zoom reacts to", 0, 2, { en: enK("fb_on") }),
+    Note("Replaces the normal trail persistence while on."),
+    Header("Echo clones"),
+    Toggle("echo_on", "Echo clones (time tunnel)"),
+    Slider("echo_count", "Copies", 1, 12, { step: 1, fmt: v => String(v), en: enK("echo_on") }),
+    Slider("echo_delay_ms", "Time step", 0, 100, { step: 1, fmt: v => `${v} ms`, en: enK("echo_on") }),
+    Slider("echo_scale", "Scale step", 0.5, 1.6, { step: 0.01, fmt: v => v.toFixed(2) + "×", en: enK("echo_on") }),
+    Slider("echo_rot", "Rotation step", -90, 90, { step: 0.5, fmt: fmtDeg, en: enK("echo_on") }),
+    Slider("echo_vortex", "Vortex spin", -180, 180, { step: 1, fmt: fmtRate, en: enK("echo_on") }),
+    Slider("echo_fade", "Fade per copy", 0.1, 1, { step: 0.01, en: enK("echo_on") }),
+    Slider("echo_hue", "Hue shift per copy", -180, 180, { step: 1, fmt: fmtDeg, en: enK("echo_on") }),
+    ...Mod("echo_mod", "echo_mod_amt", "Scale reacts to", 0, 1, { en: enK("echo_on") }),
+    Header("Kaleidoscope"),
+    Toggle("kal_on", "Kaleidoscope"),
+    Slider("kal_slices", "Slices", 2, 24, { step: 1, fmt: v => String(v), en: enK("kal_on") }),
+    Toggle("kal_mirror", "Mirror alternate slices", { en: enK("kal_on") }),
+    Slider("kal_spin", "Pattern spin", -180, 180, { step: 1, fmt: fmtRate, en: enK("kal_on") }),
+    Slider("kal_sweep", "Source sweep", -180, 180, { step: 1, fmt: fmtRate, en: enK("kal_on") }),
+    Slider("kal_keep", "Keep original", 0, 1, { step: 0.05, en: enK("kal_on") }),
+    ...Mod("kal_mod", "kal_mod_amt", "Spin reacts to", 0, 2, { en: enK("kal_on") }),
+  ]],
+  ["Geometry", [
+    Header("Companion shape"),
+    Toggle("shape_on", "3D wireframe shape"),
+    Select("shape_type", "Shape", [["sphere", "Sphere"], ["geodesic", "Geodesic"], ["torus", "Torus"], ["cube", "Cube"]], { en: enK("shape_on") }),
+    Slider("shape_size", "Size", 0.2, 3, { step: 0.01, en: enK("shape_on") }),
+    Slider("shape_detail", "Detail", 4, 40, { step: 1, fmt: v => String(v), en: enK("shape_on") }),
+    Slider("shape_torus_r", "Torus thickness", 0.1, 0.8, { step: 0.01, en: s => s.shape_on && s.shape_type === "torus" }),
+    Toggle("shape_follow", "Follow the waveform's 3D rotation", { en: enK("shape_on") }),
+    Slider("shape_spin", "Own spin", -180, 180, { step: 1, fmt: fmtRate, en: enK("shape_on") }),
+    Slider("shape_tumble", "Own tumble", -180, 180, { step: 1, fmt: fmtRate, en: enK("shape_on") }),
+    Slider("shape_width", "Line width", 0.25, 4, { step: 0.05, fmt: v => v.toFixed(2) + "×", en: enK("shape_on") }),
+    Slider("shape_bright", "Brightness", 0, 2, { step: 0.01, en: enK("shape_on") }),
+    Slider("shape_hue", "Hue offset", -180, 180, { step: 1, fmt: fmtDeg, en: enK("shape_on") }),
+    ...Mod("shape_pulse_mod", "shape_pulse_amt", "Size pulses with", 0, 1, { en: enK("shape_on") }),
+    ...Mod("shape_glow_mod", "shape_glow_amt", "Brightens with", 0, 3, { en: enK("shape_on") }),
+    Toggle("shape_trails", "Gets trails / feedback", { en: enK("shape_on") }),
+    Header("Spectrum halo"),
+    Toggle("halo_on", "Circular spectrum halo"),
+    Slider("halo_bands", "Bands", 8, 128, { step: 1, fmt: v => String(v), en: enK("halo_on") }),
+    Slider("halo_radius", "Radius", 0.2, 2, { step: 0.01, en: enK("halo_on") }),
+    Slider("halo_height", "Bar height", 0.05, 1.2, { step: 0.01, en: enK("halo_on") }),
+    Slider("halo_smooth", "Smoothing", 0, 0.95, { step: 0.01, en: enK("halo_on") }),
+    Choice("halo_dir", "Bars point", [["out", "Out"], ["in", "In"], ["both", "Both"]], { en: enK("halo_on") }),
+    Toggle("halo_sym", "Symmetric (bass at the bottom)", { en: enK("halo_on") }),
+    Toggle("halo_follow", "Follow the waveform's 3D rotation", { en: enK("halo_on") }),
+    Slider("halo_spin", "Spin", -180, 180, { step: 1, fmt: fmtRate, en: enK("halo_on") }),
+    Slider("halo_hue_span", "Colour spread", 0, 360, { step: 1, fmt: v => `${v}°`, en: enK("halo_on") }),
+    Slider("halo_hue", "Hue offset", -180, 180, { step: 1, fmt: fmtDeg, en: enK("halo_on") }),
+    Slider("halo_width", "Bar width", 0.25, 6, { step: 0.05, fmt: v => v.toFixed(2) + "×", en: enK("halo_on") }),
+    Slider("halo_bright", "Brightness", 0, 2, { step: 0.01, en: enK("halo_on") }),
+    Toggle("halo_trails", "Gets trails / feedback", { en: enK("halo_on") }),
+    Header("Spectrum terrain"),
+    Toggle("ter_on", "Scrolling spectrum terrain"),
+    Slider("ter_rows", "Rows", 8, 80, { step: 1, fmt: v => String(v), en: enK("ter_on") }),
+    Slider("ter_bands", "Points per row", 16, 128, { step: 1, fmt: v => String(v), en: enK("ter_on") }),
+    Slider("ter_speed", "Scroll speed", 2, 120, { step: 1, fmt: v => `${v} rows/s`, en: enK("ter_on") }),
+    Slider("ter_height", "Height", 0.05, 1.5, { step: 0.01, en: enK("ter_on") }),
+    Slider("ter_width", "Width", 0.5, 4, { step: 0.05, en: enK("ter_on") }),
+    Slider("ter_length", "Depth", 1, 8, { step: 0.1, en: enK("ter_on") }),
+    Slider("ter_floor", "Floor position", -2, 1, { step: 0.01, en: enK("ter_on") }),
+    Slider("ter_tilt", "Tilt", -60, 60, { step: 0.5, fmt: fmtDeg, en: s => s.ter_on && !s.ter_follow }),
+    Slider("ter_persp", "Perspective", 0, 2, { step: 0.01, en: s => s.ter_on && !s.ter_follow }),
+    Toggle("ter_center", "Bass in the centre (mirrored)", { en: enK("ter_on") }),
+    Slider("ter_fade", "Fade with distance", 0, 1, { step: 0.01, en: enK("ter_on") }),
+    Slider("ter_hue_shift", "Hue shift with distance", -180, 180, { step: 1, fmt: fmtDeg, en: enK("ter_on") }),
+    Slider("ter_width_px", "Line width", 0.25, 4, { step: 0.05, fmt: v => v.toFixed(2) + "×", en: enK("ter_on") }),
+    Slider("ter_bright", "Brightness", 0, 2, { step: 0.01, en: enK("ter_on") }),
+    Toggle("ter_follow", "Follow the waveform's 3D rotation", { en: enK("ter_on") }),
+    Toggle("ter_trails", "Gets trails / feedback", { en: enK("ter_on") }),
+  ]],
+  ["Scene", [
+    Header("Starfield"),
+    Toggle("star_on", "Starfield"),
+    Slider("star_count", "Stars", 50, 3000, { step: 10, fmt: v => String(v), en: enK("star_on") }),
+    Slider("star_speed", "Speed", 0, 5, { step: 0.05, en: enK("star_on") }),
+    ...Mod("star_mod", "star_mod_amt", "Speed reacts to", 0, 5, { en: enK("star_on") }),
+    Slider("star_streak", "Streak length", 0, 2, { step: 0.05, en: enK("star_on") }),
+    Slider("star_size", "Star size", 0.25, 4, { step: 0.05, fmt: v => v.toFixed(2) + "×", en: enK("star_on") }),
+    Slider("star_bright", "Brightness", 0, 2, { step: 0.01, en: enK("star_on") }),
+    Choice("star_color", "Colour", [["white", "White"], ["beam", "Beam"], ["rainbow", "Rainbow"]], { en: enK("star_on") }),
+    Toggle("star_trails", "Gets trails / feedback", { en: enK("star_on") }),
+    Header("Beat sparks"),
+    Toggle("spark_on", "Sparks fly off the waveform on beats"),
+    Slider("spark_count", "Sparks per beat", 2, 200, { step: 1, fmt: v => String(v), en: enK("spark_on") }),
+    Slider("spark_speed", "Speed", 0.1, 4, { step: 0.05, en: enK("spark_on") }),
+    Slider("spark_life", "Lifetime", 0.1, 3, { step: 0.05, fmt: v => v.toFixed(2) + " s", en: enK("spark_on") }),
+    Slider("spark_spread", "Spread", 0, 180, { step: 1, fmt: v => `${v}°`, en: enK("spark_on") }),
+    Slider("spark_gravity", "Gravity", -2, 2, { step: 0.05, en: enK("spark_on") }),
+    Slider("spark_streak", "Streak length", 0, 2, { step: 0.05, en: enK("spark_on") }),
+    Slider("spark_size", "Spark size", 0.25, 4, { step: 0.05, fmt: v => v.toFixed(2) + "×", en: enK("spark_on") }),
+    Slider("spark_bright", "Brightness", 0, 3, { step: 0.01, en: enK("spark_on") }),
+    Slider("spark_hue_spread", "Colour variety", 0, 180, { step: 1, fmt: v => `±${v}°`, en: enK("spark_on") }),
+    Toggle("spark_trails", "Gets trails / feedback", { en: enK("spark_on") }),
+    Note("Beat detection is tuned on the React tab."),
+    Header("Background"),
+    Toggle("bg_on", "Reactive background"),
+    Select("bg_mode", "Pattern", [["nebula", "Nebula"], ["plasma", "Plasma"], ["hex", "Hex grid"], ["rings", "Polar rings"]], { en: enK("bg_on") }),
+    Slider("bg_int", "Intensity", 0, 1, { step: 0.01, en: enK("bg_on") }),
+    Slider("bg_scale", "Scale", 0.2, 4, { step: 0.05, en: enK("bg_on") }),
+    Slider("bg_speed", "Speed", 0, 3, { step: 0.01, en: enK("bg_on") }),
+    Slider("bg_hue", "Hue", 0, 360, { step: 1, fmt: v => `${v}°`, en: enK("bg_on") }),
+    Slider("bg_hue_drift", "Hue drift", -90, 90, { step: 1, fmt: fmtRate, en: enK("bg_on") }),
+    Slider("bg_sat", "Saturation", 0, 1, { step: 0.01, en: enK("bg_on") }),
+    ...Mod("bg_mod", "bg_mod_amt", "Pulses with", 0, 3, { en: enK("bg_on") }),
+    Header("CRT & post effects"),
+    Slider("crt_scan", "Scanlines", 0, 1, { step: 0.01 }),
+    Slider("crt_scan_px", "Scanline spacing", 2, 12, { step: 0.5, fmt: v => `${v} px`, en: s => s.crt_scan > 0 }),
+    Slider("crt_curve", "Screen curvature", 0, 1, { step: 0.01 }),
+    Slider("crt_vig", "Vignette", 0, 1, { step: 0.01 }),
+    Slider("crt_grain", "Film grain", 0, 0.3, { step: 0.005, fmt: v => v.toFixed(3) }),
+    Slider("crt_chroma", "Colour split", 0, 20, { step: 0.25, fmt: v => `${v} px` }),
+    ...Mod("crt_flash_mod", "crt_flash_amt", "Colour split flashes on", 0, 40, { step: 0.5, fmt: v => `${v} px` }),
+  ]],
+  ["React", [
+    Header("Live values"),
+    LiveMeter("Loudness", () => react.level),
+    LiveMeter("Bass", () => react.bass, "#ff7a59"),
+    LiveMeter("Mids", () => react.mid, "#f0c75a"),
+    LiveMeter("Treble", () => react.treble, "#5ab4ff"),
+    LiveMeter("Beat pulse", () => react.beat, "#e07bff"),
+    Note("Every “reacts to / pulses with” control uses these values."),
+    Header("Levels"),
+    Slider("re_sens", "Sensitivity", 0.25, 4, { log: true, sig: 2, fmt: v => v.toFixed(2) + "×" }),
+    Slider("re_range", "Dynamic range", 10, 60, { step: 1, fmt: v => `${v} dB` }),
+    Slider("re_attack_ms", "Attack", 1, 200, { log: true, sig: 2, fmt: v => `${Math.round(v)} ms` }),
+    Slider("re_release_ms", "Release", 20, 2000, { log: true, sig: 2, fmt: v => `${Math.round(v)} ms` }),
+    Slider("re_tilt", "Treble boost", 0, 6, { step: 0.5, fmt: v => `${v} dB/oct` }),
+    Header("Bands"),
+    Slider("re_bass_hz", "Bass up to", 60, 400, { step: 5, fmt: fmtHz }),
+    Slider("re_treble_hz", "Treble from", 1000, 8000, { log: true, sig: 2, fmt: fmtHz }),
+    Header("Beat detection"),
+    Slider("re_beat_thresh", "Beat threshold", 1.1, 3, { step: 0.05, fmt: v => v.toFixed(2) + "×" }),
+    Slider("re_beat_decay_ms", "Beat pulse decay", 30, 1500, { log: true, sig: 2, fmt: v => `${Math.round(v)} ms` }),
+    Note("Lower threshold = more beats detected."),
   ]],
 ];
 
@@ -1238,18 +1783,101 @@ window.addEventListener("resize", resizeCanvas);
 canvas.addEventListener("webglcontextlost", e => { e.preventDefault(); showStart("The graphics context was lost. Reloading…"); setTimeout(() => location.reload(), 1500); });
 resizeCanvas();
 
-let xw = new Float32Array(0), yw = new Float32Array(0), model = new Float32Array(0);
+/* ---------- growable vertex buffers ---------- */
+let polyData = new Float32Array(3 * 8192), polyN = 0;              // xyz points (polylines)
+let pairData = new Float32Array(9 * 4096), pairN = 0;              // [a xyz, b xyz, rgb] segments
+function polyReserve(points) {
+  if ((polyN + points) * 3 > polyData.length) {
+    const nd = new Float32Array(Math.max(polyData.length * 2, (polyN + points) * 3 * 1.25) | 0); nd.set(polyData); polyData = nd;
+  }
+}
+function pairPush(ax, ay, az, bx, by, bz, c, k) {
+  if ((pairN + 1) * 9 > pairData.length) { const nd = new Float32Array(pairData.length * 2); nd.set(pairData); pairData = nd; }
+  const o = pairN++ * 9, d = pairData;
+  d[o] = ax; d[o + 1] = ay; d[o + 2] = az; d[o + 3] = bx; d[o + 4] = by; d[o + 5] = bz;
+  d[o + 6] = c[0] * k; d[o + 7] = c[1] * k; d[o + 8] = c[2] * k;
+}
+
+/* ---------- state ---------- */
+let xw = new Float32Array(0), yw = new Float32Array(0), cxw = new Float32Array(0), cyw = new Float32Array(0);
 let agcGain = S.gain, spinAngle = 0, autoYawPrev = S.auto_yaw, prevT = performance.now(), fps = 0, hudT = 0;
+let echoVortex = 0, kalOut = 0, kalSrc = 0, shapeAX = 0, shapeAY = 0, haloAngle = 0, bgTime = 0;
+let thetaN = 0, cosT = null, sinT = null;
+let shapeGeo = null, shapeSig = "";
+let haloVals = new Float32Array(0), bandTmp = new Float32Array(0);
+let terHist = [], terAcc = 0, terBands = 0;
+const STAR_MAX = 3000, starX = new Float32Array(STAR_MAX), starY = new Float32Array(STAR_MAX), starZ = new Float32Array(STAR_MAX), starH = new Float32Array(STAR_MAX);
+let starsReady = false;
+const SPARK_MAX = 4000;
+const sp = { x: new Float32Array(SPARK_MAX), y: new Float32Array(SPARK_MAX), vx: new Float32Array(SPARK_MAX), vy: new Float32Array(SPARK_MAX),
+             age: new Float32Array(SPARK_MAX), life: new Float32Array(SPARK_MAX), hue: new Float32Array(SPARK_MAX), n: 0 };
 const MIRRORS = { X: [[1, 1], [-1, 1]], Y: [[1, 1], [1, -1]], XY: [[1, 1], [-1, 1], [1, -1], [-1, -1]] };
 const NO_MIRROR = [[1, 1]];
+const BG_MODES = { nebula: 0, plasma: 1, hex: 2, rings: 3 };
+const WHITE = [0.9, 0.95, 1.0];
+
+function respawnStar(i, anyDepth) {
+  starX[i] = (Math.random() * 2 - 1) * 2.5; starY[i] = (Math.random() * 2 - 1) * 2.5;
+  starZ[i] = anyDepth ? 0.1 + Math.random() * 3.9 : 4; starH[i] = Math.random() * 360;
+}
+
+/** Read a window of audio `offset` samples in the past and apply gain + noise gate. */
+function readWindow(n, offset, outX, outY, gain, stale) {
+  if (stale) { outX.fill(0); outY.fill(0); return; }
+  audio.latest(n, outX, outY, offset);
+  const nf = S.noise_floor, gate = S.gate_on && nf > 0;
+  for (let i = 0; i < n; i++) {
+    let x = outX[i] * gain, y = outY[i] * gain;
+    if (gate) {
+      let t = (Math.sqrt(x * x + y * y) - nf) / Math.max(1e-6, nf * 0.75);
+      t = t < 0 ? 0 : t > 1 ? 1 : t; t = t * t * (3 - 2 * t); x *= t; y *= t;
+    }
+    outX[i] = x; outY[i] = y;
+  }
+}
+
+/** Append one waveform (plain or circular + great circles) to the polyline buffer. */
+function appendWave(xs, ys, n, draws, color, postScale, postRot) {
+  if (S.circ_on) {
+    if (thetaN !== n) {
+      thetaN = n; cosT = new Float32Array(n); sinT = new Float32Array(n);
+      for (let i = 0; i < n; i++) { const th = 2 * Math.PI * i / n; cosT[i] = Math.cos(th); sinT[i] = Math.sin(th); }
+    }
+    const extra = clamp(S.circ_extra | 0, 0, 11), per = n + 1;
+    polyReserve(per * (1 + extra));
+    const src = S.circ_src, base = S.circ_base, rad = S.circ_rad;
+    for (let c = 0; c <= extra; c++) {
+      draws.push({ start: polyN, count: per, color, postScale, postRot });
+      // master circle in XY; extras are great circles through the Z axis spread over 180°
+      const phi = c === 0 ? 0 : Math.PI * (c - 1) / extra, cp = Math.cos(phi), spn = Math.sin(phi);
+      let o = polyN * 3;
+      for (let k = 0; k <= n; k++) {
+        const i = k === n ? 0 : k;
+        const amp = src === "Left" ? xs[i] : src === "Right" ? ys[i] : 0.5 * (xs[i] + ys[i]);
+        const r = clamp(base + rad * amp, 0.05, 2.0), rc = r * cosT[i], rs = r * sinT[i];
+        if (c === 0) { polyData[o++] = rc; polyData[o++] = rs; polyData[o++] = 0; }
+        else { polyData[o++] = rc * cp; polyData[o++] = rc * spn; polyData[o++] = rs; }
+      }
+      polyN += per;
+    }
+  } else {
+    polyReserve(n);
+    draws.push({ start: polyN, count: n, color, postScale, postRot });
+    const d = S.depth, span = n > 1 ? 2 * d / (n - 1) : 0;
+    let o = polyN * 3;
+    for (let i = 0; i < n; i++) { polyData[o++] = xs[i]; polyData[o++] = ys[i]; polyData[o++] = -d + span * i; }
+    polyN += n;
+  }
+}
 
 function frame(now) {
   requestAnimationFrame(frame);
   const dt = clamp((now - prevT) / 1000, 0, 0.25); prevT = now;
   if (dt > 0) fps = fps ? fps * 0.92 + (1 / dt) * 0.08 : 1 / dt;
   if (!renderer) return;
+  const W = renderer.w, H = renderer.h, sr = audio.sampleRate;
 
-  // ---- auto rotation (v47/v48 behaviour: turning auto-yaw off recentres yaw) ----
+  // ---- auto rotation (turning auto-yaw off recentres yaw, like v47/v48) ----
   if (autoYawPrev && !S.auto_yaw) S.yaw = 0;
   autoYawPrev = S.auto_yaw;
   if (S.rot3d) {
@@ -1258,15 +1886,17 @@ function frame(now) {
     if (S.auto_roll) S.roll = wrapDeg(S.roll + S.roll_rate * dt);
   }
 
-  // ---- audio window ----
+  // ---- audio window, level, AGC ----
   const n = clamp(S.window_samples | 0, 2, RING - 1);
-  if (xw.length !== n) { xw = new Float32Array(n); yw = new Float32Array(n); }
+  if (xw.length !== n) { xw = new Float32Array(n); yw = new Float32Array(n); cxw = new Float32Array(n); cyw = new Float32Array(n); }
   const stale = !audio.kind || audio.stale;
   if (stale) { xw.fill(0); yw.fill(0); } else audio.latest(n, xw, yw);
-  let peak = 0;
-  for (let i = 0; i < n; i++) { const a = Math.abs(xw[i]), b = Math.abs(yw[i]); if (a > peak) peak = a; if (b > peak) peak = b; }
-
-  // ---- gain / AGC ----
+  let peak = 0, sumsq = 0;
+  for (let i = 0; i < n; i++) {
+    const a = xw[i], b = yw[i], aa = Math.abs(a), bb = Math.abs(b);
+    if (aa > peak) peak = aa; if (bb > peak) peak = bb; sumsq += a * a + b * b;
+  }
+  const rms = Math.sqrt(sumsq / (2 * n));
   let gain;
   if (S.agc_on) {
     const maxG = Math.max(AGC_MIN_GAIN, S.agc_max);
@@ -1277,73 +1907,199 @@ function frame(now) {
     gain = agcGain;
   } else { gain = S.gain; agcGain = gain; }
   stats.peak = peak; stats.gain = gain; stats.stale = stale;
+  react.update(dt, rms, now, !stale);
+  readWindow(n, 0, xw, yw, gain, stale);                     // gain + noise gate (re-reads the same window)
 
-  // ---- gain + noise gate ----
-  const nf = S.noise_floor, gate = S.gate_on && nf > 0;
-  for (let i = 0; i < n; i++) {
-    let x = xw[i] * gain, y = yw[i] * gain;
-    if (gate) {
-      let t = (Math.sqrt(x * x + y * y) - nf) / Math.max(1e-6, nf * 0.75);
-      t = t < 0 ? 0 : t > 1 ? 1 : t; t = t * t * (3 - 2 * t); x *= t; y *= t;
-    }
-    xw[i] = x; yw[i] = y;
-  }
-
-  // ---- model coordinates (x, y, z per point) ----
-  const ranges = [];
-  if (S.circ_on) {
-    const extra = clamp(S.circ_extra | 0, 0, 11), per = n + 1, total = per * (1 + extra);
-    if (model.length < total * 3) model = new Float32Array(total * 3 * 1.25 | 0);
-    const src = S.circ_src, base = S.circ_base, rad = S.circ_rad;
-    const r = new Float32Array(n), ct = new Float32Array(n), st = new Float32Array(n);
-    for (let i = 0; i < n; i++) {
-      const amp = src === "Left" ? xw[i] : src === "Right" ? yw[i] : 0.5 * (xw[i] + yw[i]);
-      r[i] = clamp(base + rad * amp, 0.05, 2.0);
-      const th = 2 * Math.PI * i / n; ct[i] = Math.cos(th); st[i] = Math.sin(th);
-    }
-    let o = 0;
-    for (let c = 0; c <= extra; c++) {
-      ranges.push([o / 3, per]);
-      // master circle in the XY plane; extras are great circles through the Z axis spread over 180°
-      const phi = c === 0 ? 0 : Math.PI * (c - 1) / extra, cp = Math.cos(phi), sp = Math.sin(phi);
-      for (let k = 0; k <= n; k++) {
-        const i = k === n ? 0 : k, rc = r[i] * ct[i], rs = r[i] * st[i];
-        if (c === 0) { model[o++] = rc; model[o++] = rs; model[o++] = 0; }
-        else { model[o++] = rc * cp; model[o++] = rc * sp; model[o++] = rs; }
-      }
-    }
-  } else {
-    if (model.length < n * 3) model = new Float32Array(n * 3 * 1.25 | 0);
-    const d = S.depth, span = n > 1 ? 2 * d / (n - 1) : 0;
-    for (let i = 0, o = 0; i < n; i++) { model[o++] = xw[i]; model[o++] = yw[i]; model[o++] = -d + span * i; }
-    ranges.push([0, n]);
-  }
-  const used = (ranges.length ? ranges[ranges.length - 1][0] + ranges[ranges.length - 1][1] : 0) * 3;
-
-  // ---- 2D spin ----
+  // ---- spin, colour, projection ----
   let spinDelta = 0;
   if (S.spin_on && S.spin_rate !== 0) {
     spinAngle = wrapDeg(spinAngle + (S.spin_dir === "CCW" ? 1 : -1) * S.spin_rate * dt);
     spinDelta = spinAngle;
   }
-
-  // ---- colour ----
   let color;
   if (S.custom_on) color = hexToRgb(S.custom_color);
   else if (S.cycle_on) color = hsvToRgb(S.cycle_rate * now / 1000);
   else color = hexToRgb(PALETTE[S.palette_idx % PALETTE.length][0]);
+  const mainRot = rotationMatrix(S.roll + spinDelta, S.pitch, S.yaw);
+  const mainProj = { rot: mainRot, K: S.persp / Math.max(1, S.depth), use3D: S.rot3d, spin: spinDelta * Math.PI / 180 };
+  const sigma = Math.max(0.35, S.thickness * 0.5 * pixelScale);
 
-  const persist = clamp(S.trail_persist, 0, 0.999);
+  // ---- waveform + echo clones ----
+  polyN = 0;
+  const draws = [];
+  if (S.echo_on) {
+    echoVortex = wrapDeg(echoVortex + S.echo_vortex * dt);
+    const count = clamp(S.echo_count | 0, 1, 12);
+    let dly = Math.round(S.echo_delay_ms / 1000 * sr);
+    if (count * dly + n > RING - 1) dly = Math.max(0, Math.floor((RING - 1 - n) / count));
+    const scl = S.echo_scale * (1 + S.echo_mod_amt * react.mod(S.echo_mod));
+    for (let k = count; k >= 1; k--) {
+      const src = dly > 0 ? (readWindow(n, k * dly, cxw, cyw, gain, stale), [cxw, cyw]) : [xw, yw];
+      const col = scaleRgb(hueRotate(color, k * S.echo_hue), Math.pow(S.echo_fade, k));
+      appendWave(src[0], src[1], n, draws, col, Math.pow(scl, k), k * (S.echo_rot + echoVortex) * Math.PI / 180);
+    }
+  }
+  const mainStart = polyN;
+  appendWave(xw, yw, n, draws, color, 1, 0);
+  const mainCount = n;
+
+  // ---- extra layers (segment pairs) ----
+  pairN = 0;
+  const pdraws = [];
+  const layer = (fn, opts) => { const start = pairN; fn(); if (pairN > start) pdraws.push({ start, count: pairN - start, ...opts }); };
+
+  if (S.shape_on) {
+    const sig = `${S.shape_type}|${S.shape_detail}|${S.shape_torus_r}`;
+    if (sig !== shapeSig) { shapeGeo = buildShape(S.shape_type, S.shape_detail, S.shape_torus_r); shapeSig = sig; }
+    shapeAY = wrapDeg(shapeAY + S.shape_spin * dt); shapeAX = wrapDeg(shapeAX + S.shape_tumble * dt);
+    const local = rotationMatrix(0, shapeAX, shapeAY);
+    const follow = S.shape_follow && S.rot3d;
+    const c = hueRotate(color, S.shape_hue), g = shapeGeo;
+    layer(() => { for (let i = 0; i < g.length; i += 6) pairPush(g[i], g[i + 1], g[i + 2], g[i + 3], g[i + 4], g[i + 5], c, 1); }, {
+      proj: { rot: follow ? mat3Mul(mainRot, local) : local, K: follow ? mainProj.K : 0.3, use3D: true, clamp: 20,
+              modelScale: S.shape_size * (1 + S.shape_pulse_amt * react.mod(S.shape_pulse_mod)) },
+      sigma: sigma * S.shape_width, intensity: S.shape_bright * (1 + S.shape_glow_amt * react.mod(S.shape_glow_mod)), trails: S.shape_trails });
+  }
+
+  if (S.halo_on) {
+    const B = clamp(S.halo_bands | 0, 4, 256);
+    bandTmp = react.bands(B, bandTmp);
+    if (haloVals.length !== B) haloVals = new Float32Array(B);
+    const keep = Math.pow(S.halo_smooth, dt * 60);
+    for (let i = 0; i < B; i++) { const v = bandTmp[i]; haloVals[i] = v > haloVals[i] ? v : haloVals[i] * keep + v * (1 - keep); }
+    haloAngle = wrapDeg(haloAngle + S.halo_spin * dt);
+    const off = haloAngle * Math.PI / 180, r0 = S.halo_radius, hgt = S.halo_height;
+    layer(() => {
+      for (let i = 0; i < B; i++) {
+        const t = B > 1 ? i / (B - 1) : 0, c = hueRotate(color, S.halo_hue + S.halo_hue_span * (t - 0.5));
+        const len = hgt * haloVals[i] + 0.004;
+        let a0, a1;
+        if (S.halo_dir === "out") { a0 = r0; a1 = r0 + len; } else if (S.halo_dir === "in") { a0 = r0; a1 = Math.max(0, r0 - len); }
+        else { a0 = r0 - len / 2; a1 = r0 + len / 2; }
+        const angs = S.halo_sym ? [-Math.PI / 2 + Math.PI * (i + 0.5) / B] : [Math.PI / 2 - 2 * Math.PI * (i + 0.5) / B];
+        if (S.halo_sym) angs.push(Math.PI - angs[0]);
+        for (const a of angs) {
+          const ca = Math.cos(a + off), sa = Math.sin(a + off);
+          pairPush(ca * a0, sa * a0, 0, ca * a1, sa * a1, 0, c, 1);
+        }
+      }
+    }, { proj: S.halo_follow ? { ...mainProj, clamp: 20 } : { rot: mainRot, K: 0, use3D: false, spin: 0, clamp: 20 },
+         sigma: sigma * S.halo_width, intensity: S.halo_bright, trails: S.halo_trails });
+  }
+
+  if (S.ter_on) {
+    const B = clamp(S.ter_bands | 0, 4, 256), R = clamp(S.ter_rows | 0, 2, 200);
+    if (B !== terBands) { terHist = []; terBands = B; }
+    terAcc += S.ter_speed * dt;
+    let pushes = 0;
+    while (terAcc >= 1 && pushes < R) { terHist.unshift(react.bands(B, null)); terAcc -= 1; pushes++; }
+    if (terAcc >= 1) terAcc %= 1;
+    if (terHist.length > R + 1) terHist.length = R + 1;
+    const Wd = S.ter_width, len = S.ter_length, dz = len / R, fl = S.ter_floor, hg = S.ter_height;
+    layer(() => {
+      for (let r = 0; r < terHist.length; r++) {
+        const depth = (r + terAcc) / R;
+        if (depth > 1) break;
+        const k = S.ter_bright * Math.max(0, 1 - S.ter_fade * depth);
+        if (k <= 0.002) continue;
+        const c = hueRotate(color, S.ter_hue_shift * depth), v = terHist[r], z = (r + terAcc) * dz;
+        let px = 0, py = 0;
+        for (let j = 0; j < B; j++) {
+          const t = B > 1 ? j / (B - 1) * 2 - 1 : 0;
+          const b = S.ter_center ? Math.round(Math.abs(t) * (B - 1)) : j;
+          const x = t * Wd, y = fl + hg * v[b];
+          if (j > 0) pairPush(px, py, z, x, y, z, c, k);
+          px = x; py = y;
+        }
+      }
+    }, { proj: S.ter_follow ? { ...mainProj, use3D: true, clamp: 20 } : { rot: rotationMatrix(0, S.ter_tilt, 0), K: S.ter_persp, use3D: true, clamp: 20 },
+         sigma: sigma * S.ter_width_px, intensity: 1, trails: S.ter_trails });
+  } else if (terHist.length) { terHist = []; }
+
+  if (S.star_on) {
+    if (!starsReady) { for (let i = 0; i < STAR_MAX; i++) respawnStar(i, true); starsReady = true; }
+    const cnt = clamp(S.star_count | 0, 0, STAR_MAX);
+    const spd = S.star_speed * (1 + S.star_mod_amt * react.mod(S.star_mod));
+    const tail = spd * S.star_streak * 0.12 + 0.004;
+    layer(() => {
+      for (let i = 0; i < cnt; i++) {
+        starZ[i] -= spd * dt;
+        if (starZ[i] < 0.08) respawnStar(i, false);
+        const z = starZ[i], sx = starX[i] / z * 0.5, sy = starY[i] / z * 0.5;
+        if (Math.abs(sx) > 4 || Math.abs(sy) > 4) { respawnStar(i, false); continue; }
+        const z2 = z + tail, tx = starX[i] / z2 * 0.5, ty = starY[i] / z2 * 0.5;
+        const k = S.star_bright * clamp((4 - z) / 1.5, 0, 1) * clamp(1.4 / z, 0.3, 1.5);
+        const c = S.star_color === "white" ? WHITE : S.star_color === "beam" ? color : hsvToRgb(starH[i]);
+        pairPush(tx, ty, 0, sx, sy, 0, c, k);
+      }
+    }, { proj: { rot: mainRot, K: 0, use3D: false, spin: 0, clamp: 50 }, sigma: sigma * S.star_size, intensity: 1, trails: S.star_trails });
+  }
+
+  if (S.spark_on || sp.n) {
+    if (S.spark_on && react.beatEvent && mainCount > 1) {
+      const want = clamp(S.spark_count | 0, 0, 500);
+      for (let s = 0; s < want && sp.n < SPARK_MAX; s++) {
+        const i = mainStart + ((Math.random() * mainCount) | 0), o = i * 3;
+        const [px, py] = projectPoint(polyData[o], polyData[o + 1], polyData[o + 2], mainProj);
+        let ang = Math.hypot(px, py) > 1e-3 ? Math.atan2(py, px) : Math.random() * 2 * Math.PI;
+        ang += (Math.random() - 0.5) * S.spark_spread * Math.PI / 180 * 2;
+        const v = S.spark_speed * (0.5 + 0.5 * Math.random()), j = sp.n++;
+        sp.x[j] = px; sp.y[j] = py; sp.vx[j] = Math.cos(ang) * v; sp.vy[j] = Math.sin(ang) * v;
+        sp.age[j] = 0; sp.life[j] = S.spark_life * (0.6 + 0.4 * Math.random()); sp.hue[j] = (Math.random() * 2 - 1) * S.spark_hue_spread;
+      }
+    }
+    let w = 0;
+    for (let i = 0; i < sp.n; i++) {                         // update + compact
+      sp.age[i] += dt; if (sp.age[i] >= sp.life[i]) continue;
+      sp.vy[i] -= S.spark_gravity * dt; sp.x[i] += sp.vx[i] * dt; sp.y[i] += sp.vy[i] * dt;
+      if (w !== i) for (const k of ["x", "y", "vx", "vy", "age", "life", "hue"]) sp[k][w] = sp[k][i];
+      w++;
+    }
+    sp.n = w;
+    if (S.spark_on) layer(() => {
+      const st = S.spark_streak * 0.1 + 0.002;
+      for (let i = 0; i < sp.n; i++) {
+        const f = 1 - sp.age[i] / sp.life[i], k = S.spark_bright * f * Math.sqrt(f);
+        pairPush(sp.x[i] - sp.vx[i] * st, sp.y[i] - sp.vy[i] * st, 0, sp.x[i], sp.y[i], 0, hueRotate(color, sp.hue[i]), k);
+      }
+    }, { proj: { rot: mainRot, K: 0, use3D: false, spin: 0, clamp: 50 }, sigma: sigma * S.spark_size, intensity: 1, trails: S.spark_trails });
+    else sp.n = 0;
+  }
+
+  // ---- kaleidoscope / feedback / glow / post ----
+  let kal = null;
+  if (S.kal_on) {
+    kalOut = wrapDeg(kalOut + (S.kal_spin + S.kal_mod_amt * react.mod(S.kal_mod) * 180) * dt);
+    kalSrc = wrapDeg(kalSrc + S.kal_sweep * dt);
+    kal = { n: clamp(S.kal_slices | 0, 2, 64), rotOut: kalOut * Math.PI / 180, rotSrc: kalSrc * Math.PI / 180, keep: S.kal_keep, mirror: S.kal_mirror };
+  }
+  let feedback = null, decay;
+  if (S.fb_on) {
+    const zr = S.fb_zoom + S.fb_mod_amt * react.mod(S.fb_mod), R = 0.5 * Math.min(W, H), d2r = Math.PI / 180;
+    feedback = { zoom: Math.exp(zr * dt), rot: S.fb_rot * d2r * dt, swirl: S.fb_swirl * d2r * dt, hue: S.fb_hue * d2r * dt,
+                 drift: [S.fb_drift_x * R * dt, S.fb_drift_y * R * dt] };
+    decay = Math.pow(clamp(S.fb_persist, 0, 0.999), dt * REF_FPS);
+  } else {
+    const persist = clamp(S.trail_persist, 0, 0.999);
+    decay = S.trails && persist > 0 ? Math.pow(persist, dt * REF_FPS) : 0;
+  }
+  bgTime += dt * S.bg_speed * (1 + 0.5 * S.bg_mod_amt * react.mod(S.bg_mod));
+  const secs = now / 1000;
+
   renderer.draw({
-    data: model.subarray(0, used), ranges,
-    mirrors: S.mirror_on ? (MIRRORS[S.mirror_mode] || NO_MIRROR) : NO_MIRROR,
-    preMirror: S.mirror_pre3d || !S.mirror_on,
-    rot: rotationMatrix(S.roll + spinDelta, S.pitch, S.yaw), use3D: S.rot3d,
-    K: S.persp / Math.max(1, S.depth), spin: spinDelta * Math.PI / 180,
-    sigma: Math.max(0.35, S.thickness * 0.5 * pixelScale), color, speedDim: S.speed_dim, dots: S.draw_mode === "dots",
-    decay: S.trails && persist > 0 ? Math.pow(persist, dt * REF_FPS) : 0,
-    glow: S.glow_on ? S.glow_strength : 0, glowRadius: S.glow_radius, exposure: S.brightness,
-    grid: S.grid, gridW: Math.max(0.5, 0.5 * pixelScale),
+    poly: { data: polyData.subarray(0, polyN * 3), draws, mirrors: S.mirror_on ? (MIRRORS[S.mirror_mode] || NO_MIRROR) : NO_MIRROR,
+            preMirror: S.mirror_pre3d || !S.mirror_on, proj: mainProj, sigma, speedDim: S.speed_dim, dots: S.draw_mode === "dots" },
+    pairs: { data: pairData.subarray(0, pairN * 9), draws: pdraws },
+    kal, feedback, decay,
+    glow: S.glow_on ? S.glow_strength * (1 + S.glow_mod_amt * react.mod(S.glow_mod)) : 0, glowRadius: S.glow_radius,
+    exposure: S.brightness, grid: S.grid, gridW: Math.max(0.5, 0.5 * pixelScale),
+    comp: {
+      curve: S.crt_curve, chroma: (S.crt_chroma + S.crt_flash_amt * react.mod(S.crt_flash_mod)) * pixelScale,
+      scan: S.crt_scan, scanPx: S.crt_scan_px * pixelScale, vig: S.crt_vig, grain: S.crt_grain, time: secs % 1000,
+      bg: S.bg_on, bgMode: BG_MODES[S.bg_mode] || 0, bgInt: S.bg_int, bgScale: S.bg_scale, bgTime: bgTime % 10000,
+      bgHue: (((S.bg_hue + S.bg_hue_drift * secs) % 360) + 360) % 360 / 360, bgSat: S.bg_sat,
+      bgPulse: 1 + S.bg_mod_amt * react.mod(S.bg_mod),
+    },
   });
 
   // ---- HUD / panel ----
