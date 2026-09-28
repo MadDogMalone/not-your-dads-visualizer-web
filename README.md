@@ -10,6 +10,23 @@ Windows 10/11 Chromium Visualizer
 
 Tip: picking a single **Chrome tab** instead of the whole screen also works, and it visualizes just that tab's audio (e.g. a YouTube tab).
 
+## What's in the settings panel
+
+The panel has ten tabs:
+
+- **Display:** beam, glow, trails, time window.
+- **Shape:** circular wave, mirror.
+- **Motion:** 3D rotation, spin.
+- **Color:** presets, custom colour, colour cycle.
+- **Audio:** source, gain / AGC, noise gate.
+- **Filters:** DC block, high-pass, low-pass.
+- **Effects:** feedback zoom, echo clones, kaleidoscope.
+- **Geometry:** 3D companion shape, spectrum halo, spectrum terrain.
+- **Scene:** starfield, beat sparks, reactive background, CRT / post effects.
+- **React:** live bass / mid / treble / beat meters, plus sensitivity and beat-detection tuning.
+
+Every effect starts **off**. Most effects have a "reacts to / pulses with" control that links them to loudness, bass, mids, treble or the beat pulse. The layer effects (shape, halo, terrain, stars, sparks) each have a "Gets trails / feedback" switch that decides whether they smear with the trails or stay crisp. A small dot on a tab means something on it differs from the default.
+
 ## Keys
 
 | Key | Action |
